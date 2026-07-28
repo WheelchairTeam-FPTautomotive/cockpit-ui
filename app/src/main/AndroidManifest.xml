@@ -1,0 +1,44 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Network permission to query RAG backend -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- Audio recording for Speech-to-Text -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Car API permissions (Pre-granted on simulated Skycraft system runtime) -->
+    <uses-permission android:name="android.car.permission.CAR_INFO" />
+    <uses-permission android:name="android.car.permission.CAR_SPEED" />
+    <uses-permission android:name="android.car.permission.CONTROL_CAR_CLIMATE" />
+
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
+    <application
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:label="Wheelchair Copilot"
+        android:roundIcon="@android:drawable/sym_def_app_icon"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        
+        <activity
+            android:name="com.wheelchair.cockpit.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                
+                <!-- Display on standard launcher -->
+                <category android:name="android.intent.category.LAUNCHER" />
+                
+                <!-- Display on AAOS Digital Cockpit App Grid launcher -->
+                <category android:name="android.intent.category.CAR_LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

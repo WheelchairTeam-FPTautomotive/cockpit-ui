@@ -1,4 +1,4 @@
-- [ ] Add `ui-tooling` dependency to `app/build.gradle.kts`
-- [ ] Perform Gradle Sync
-- [ ] Verify fix by rendering Compose Preview
-- [ ] Create walkthrough summary
+- [x] Add `ui-tooling` dependency to `app/build.gradle.kts`
+- [x] Perform Gradle Sync
+- [x] Verify fix by rendering Compose Preview
+- [x] Create walkthrough summary
