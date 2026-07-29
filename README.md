@@ -38,7 +38,8 @@ Before building or running the app, ensure your development environment has:
    * **Min SDK**: `33` (Android 13+ Automotive)
 3. **Java Development Kit (JDK)**: JDK 17 (Java 17).
 4. **Android Automotive Emulator**:
-   * Create an AVD in Android Studio using an **Automotive** system image (e.g., *Automotive with Play Store System Image* API 33/34).
+   * Create an AVD in Android Studio using an **Automotive** system image **WITHOUT Google Play** (e.g., *Android Automotive (1080p landscape)* API 33/34).
+   * ⚠️ **Important**: Do NOT use the "with Play Store" image for development. The Play Store images are `user` builds which strictly enforce Driver Distraction (CarUxRestrictions) security and signature checks, blocking side-loaded dev apps when driving. Using a non-Play Store image (`userdebug` build) prevents these OS-level locks and allows full access to VHAL simulation testing.
 
 ---
 
