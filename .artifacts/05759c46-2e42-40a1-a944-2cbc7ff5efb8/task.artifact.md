@@ -1,6 +1,10 @@
-- [ ] Update `QuickActionCard.kt` to support `enabled` state
-- [ ] Update `AutomotiveTopBar.kt` to handle `isDrivingRestricted`
-- [ ] Update `AutomotiveBottomDock.kt` to handle `isDrivingRestricted`
-- [ ] Update `ManualInputBar.kt` to handle `isDrivingRestricted`
-- [ ] Update `MainActivity.kt` to pass `isDrivingRestricted` to all components
-- [ ] Verify changes in emulator (Manual Verification)
+- [x] Update `QuickActionCard.kt` to support `enabled` state
+- [x] Update `AutomotiveTopBar.kt` to handle `isDrivingRestricted`
+- [x] Update `AutomotiveBottomDock.kt` to handle `isDrivingRestricted`
+- [x] Update `ManualInputBar.kt` to handle `isDrivingRestricted`
+- [x] Update `MainActivity.kt` to pass `isDrivingRestricted` to all components
+- [x] Fix Car Service connection and Speedometer:
+    - [x] Update `AndroidManifest.xml` with app-level `distractionOptimized`
+    - [x] Refactor `CarPropertyHelper.kt` for robust service connection
+    - [x] Update `MainActivity.kt` to use unified `CarPropertyHelper`
+- [ ] Verify changes in emulator

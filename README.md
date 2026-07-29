@@ -1,6 +1,6 @@
 # 🚗 Wheelchair Cockpit UI (Android Automotive OS)
 
-> **Team Wheelchair** — FPT Hackathon 2026  
+> **Team Wheelchair** — FPT Hackathon 2026
 > Android Automotive (AAOS) Digital Cockpit UI for KMS AI Agent — Voice-driven automotive documentation assistant.
 
 ---
@@ -32,7 +32,7 @@
 Before building or running the app, ensure your development environment has:
 
 1. **Android Studio**: Android Studio Jellyfish (2023.3.1) or Koala (2024.1.1)+.
-2. **Android SDK**: 
+2. **Android SDK**:
    * **Target SDK**: `34` (Android 14)
    * **Compile SDK**: `34`
    * **Min SDK**: `33` (Android 13+ Automotive)
@@ -54,9 +54,9 @@ Before building or running the app, ensure your development environment has:
 
 The app connects to the `backend-orchestrator` gateway server.
 
-* **Android Emulator (Default)**: 
+* **Android Emulator (Default)**:
   `http://10.0.2.2:8000/` automatically maps the Android Emulator loopback to the host machine's `localhost:8000`.
-* **Physical Device / Custom Server**: 
+* **Physical Device / Custom Server**:
   If running on a physical head unit or custom network, edit the `BASE_URL` in `CopilotClient.kt`:
   ```kotlin
   // File: app/src/main/java/com/wheelchair/cockpit/api/CopilotClient.kt
@@ -68,6 +68,7 @@ The app connects to the `backend-orchestrator` gateway server.
 You can build the debug APK using Gradle wrapper:
 
 **Windows (PowerShell / Command Prompt)**:
+
 ```powershell
 # Navigate to cockpit-ui root
 cd d:\Hackathon\cockpit-ui
@@ -77,11 +78,12 @@ cd d:\Hackathon\cockpit-ui
 ```
 
 **Linux / macOS**:
+
 ```bash
 ./gradlew assembleDebug
 ```
 
-The compiled APK will be located at:  
+The compiled APK will be located at:
 `app/build/outputs/apk/debug/app-debug.apk`
 
 ### Step 4: Deploy onto Emulator or CarSky Simulator
@@ -122,19 +124,79 @@ cockpit-ui/
 ## ❓ Troubleshooting & FAQs
 
 #### Q1: App shows "Lỗi kết nối Backend" when asking a question.
+
 * **Cause**: `backend-orchestrator` is not running or port 8000 is blocked.
 * **Fix**: Ensure the FastAPI server is running on the host machine (`docker compose up` or `uv run uvicorn main:app --port 8000`). Test in browser: `http://localhost:8000/api/v1/health`.
 
 #### Q2: SpeechRecognizer says "Microphone permission required".
+
 * **Fix**: Grant audio permission manually via ADB:
   ```bash
   adb shell pm grant com.wheelchair.cockpit android.permission.RECORD_AUDIO
   ```
 
 #### Q3: How to simulate vehicle speed alerts (>80 km/h)?
+
 * Use Android Studio Emulator Extended Controls -> **Car Data**, or run the VHAL sender script in `backend-orchestrator/scripts/vhal_mock_sender.py`.
 
 ---
 
+## 🚘 Driver Distraction Guidelines (CarUxRestrictions) & Production Setup
+
+Android Automotive OS enforces strict **Driver Distraction Guidelines (CarUxRestrictions)** when the vehicle is in motion (Gear = D / Speed > 0).
+
+### 🛡️ Architecture & Manifest Configuration
+
+To comply with Google Automotive Safety Guidelines while preserving voice assistant functionality:
+
+1. **Manifest Declaration**:
+   The `MainActivity` is marked with `distractionOptimized="true"` inside `AndroidManifest.xml`:
+   ```xml
+   <activity android:name="com.wheelchair.cockpit.MainActivity" android:exported="true">
+       <meta-data android:name="distractionOptimized" android:value="true" />
+   </activity>
+   ```
+
+2. **Dynamic UI Separation (`CarUxRestrictionsManager`)**:
+   - **Voice-First Group (Always Enabled)**: Wake-word listener ("Hey Car"), microphone controls, real-time STT speech recognition, and TTS audio responses remain 100% active during driving.
+   - **Manual Input Group (Locked During Driving)**: Text entry field (`ManualInputBar`), settings dialog (`SystemSettingsDialog`), and manual touch shortcuts (`QuickActionCard`) are dynamically disabled and display `VOICE MODE ONLY (Đang lái xe)` when `isDrivingRestricted = true`.
+
+---
+
+### 🧪 Development Bypass on "user" Build Emulators (Phần A)
+
+On Android Automotive OS **`user`** build images (such as *Automotive with Google Play Store*):
+- `CarPackageManagerService` requires apps tagged with `distractionOptimized="true"` to come from a trusted installer source.
+- Side-loaded debug APKs (`adb install`) on `user` builds may trigger system distraction locks when Gear = D.
+
+#### Dev/Test Strategy on Emulator:
+1. **List VHAL Properties & Obtain Property IDs**:
+   ```bash
+   adb shell dumpsys car_service --list
+   ```
+2. **Inject GEAR_PARK Event**:
+   Simulate vehicle gear fixed at **P (Park)** via VHAL injection so the UI & Voice Assistant remain fully active:
+   ```bash
+   adb shell dumpsys car_service inject-vhal-event 0x11600400 4
+   ```
+3. **Test Speedometer & Speed Alert**:
+   With simulated Gear = P, adjust vehicle speed in Emulator **Extended Controls -> Car Data** (> 80 km/h) to verify VHAL speed updates and safety alerts without OS distraction lockouts.
+
+---
+
+### 🏭 Production Deployment Pathways (Phần B)
+
+To enable true `distractionOptimized` execution on production vehicles without OS overlay blocks, select one of the following 3 official production pathways:
+
+1. **Google Play Store Publishing**:
+   Publish the application to the Google Play Store under the **Android Automotive OS** category. Play Store installer package (`com.android.vending`) is listed in the default system whitelist (`allowedAppInstallSources`).
+2. **OEM System Whitelisting**:
+   For direct OEM vehicle partnerships, add the application package name (`com.wheelchair.cockpit`) to the vehicle's ROM system configuration file (`car_ux_restrictions_config.xml` under `allowedAppInstallSources` or `config_allowedSystemApps`).
+3. **Privileged System App**:
+   Install the application directly into the ROM's `/system/priv-app/` directory (for custom Automotive ROM builds).
+
+---
+
 ## 📄 License
+
 MIT — Team Wheelchair (FPT Hackathon 2026)

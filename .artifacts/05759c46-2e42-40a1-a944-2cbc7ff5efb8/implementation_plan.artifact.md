@@ -1,50 +1,41 @@
-# Implementation Plan - Driver Distraction Optimization (CarUxRestrictions)
+# Implementation Plan - Fix Speedometer and App Locking Issues
 
-Optimizing the Wheelchair Copilot app for Android Automotive OS Driver Distraction Guidelines. The goal is to allow voice interactions while driving but restrict manual UI interactions (typing, settings, complex buttons).
+The goal is to fix the `NullPointerException` when registering VHAL listeners (which prevents the speedometer from working) and ensure the app is correctly recognized as "distraction optimized" by the system to prevent the locking overlay.
 
 ## User Review Required
 
 > [!IMPORTANT]
-> The current `AndroidManifest.xml` already contains `distractionOptimized=true`. If the app is still blocked with a "Close app" overlay, it might be due to a system policy or how the emulator is configured. However, we will proceed with UI-level restrictions to ensure compliance once the overlay issue is resolved (or as part of the resolution).
+> The logs show a `NullPointerException` in `CarPropertyManager` and a permission error for `PERF_VEHICLE_SPEED`. We will unify the Car Service connection logic and ensure permissions are correctly handled.
 
 > [!WARNING]
-> We will be hiding or disabling several UI elements during driving. This includes the manual text input, settings button, and quick action cards. Ensure this aligns with the desired UX.
+> We will be consolidating the `Car` object creation. Currently, multiple instances are being created, which causes service connection leaks and potential conflicts.
 
 ## Proposed Changes
 
-### [Component Name] UI Components
+### [Component Name] Car Service & VHAL
 
 #### [MODIFY] [MainActivity.kt](file:///D:/Hackathon/cockpit-ui/app/src/main/java/com/wheelchair/cockpit/MainActivity.kt)
-- Pass `isDrivingRestricted` to `AutomotiveTopBar`, `QuickActionCard`s, and `AutomotiveBottomDock`.
+- Remove the redundant/deprecated `Car.createCar(this)` call.
+- Modify `CarPropertyHelper` to return the `Car` instance or provide access to the `CarUxRestrictionsManager`.
+- Initialize `CarUxRestrictionsManager` inside the `CarPropertyHelper` connection callback to ensure the service is ready.
+- Add an explicit `Handler` to `Car.createCar` to avoid internal null pointers.
 
-#### [MODIFY] [ManualInputBar.kt](file:///D:/Hackathon/cockpit-ui/app/src/main/java/com/wheelchair/cockpit/ui/components/ManualInputBar.kt)
-- When `isDrivingRestricted` is true, hide the `TextField` and show a "Voice Mode Only" indicator.
-- Disable the "Send" button completely.
+#### [MODIFY] [CarPropertyHelper.kt](file:///D:/Hackathon/cockpit-ui/app/src/main/java/com/wheelchair/cockpit/vhal/CarPropertyHelper.kt)
+- Update `connectCarService` to use a main thread `Handler`.
+- Provide a way to register for UX restrictions through the unified `Car` instance.
+- Update `registerVhalListeners` to be more robust.
 
-#### [MODIFY] [QuickActionCard.kt](file:///D:/Hackathon/cockpit-ui/app/src/main/java/com/wheelchair/cockpit/ui/components/QuickActionCard.kt)
-- Add `enabled: Boolean = true` parameter.
-- When `enabled` is false, disable the `clickable` modifier and lower the opacity of the card to indicate it's inactive.
-
-#### [MODIFY] [AutomotiveTopBar.kt](file:///D:/Hackathon/cockpit-ui/app/src/main/java/com/wheelchair/cockpit/ui/components/AutomotiveTopBar.kt)
-- Add `isDrivingRestricted: Boolean = false` parameter.
-- Disable/Hide the Settings icon button when restricted.
-
-#### [MODIFY] [AutomotiveBottomDock.kt](file:///D:/Hackathon/cockpit-ui/app/src/main/java/com/wheelchair/cockpit/ui/components/AutomotiveBottomDock.kt)
-- Add `isDrivingRestricted: Boolean = false` parameter.
-- Disable/Hide the Settings navigation item when restricted.
+#### [MODIFY] [AndroidManifest.xml](file:///D:/Hackathon/cockpit-ui/app/src/main/AndroidManifest.xml)
+- Add `distractionOptimized="true"` to the `<application>` tag as well to ensure full system recognition.
+- Ensure all required car permissions are present (already looks okay, but will double-check).
 
 ## Verification Plan
 
 ### Automated Tests
-- N/A (UI behavior based on system state is best verified manually in emulator).
+- N/A
 
 ### Manual Verification
-- Use the Android Automotive Emulator "Extended Controls".
-- Set **Gear = D** and **Car Speed > 0**.
-- Verify:
-  - The manual input bar changes to "Voice Mode Only".
-  - "Quick Action" cards (Maps, Music) are dimmed and non-clickable.
-  - The "Settings" icon in the top bar is hidden or disabled.
-  - The "Settings" tab in the bottom dock is hidden or disabled.
-  - The Voice Assistant ("Hey Car" and mic button) still works.
-  - The overlay "Close app" should no longer appear if the manifest is correctly picked up.
+- Deploy the app to the emulator.
+- Check logs for "Car Service connected successfully" and "Registered PERF_VEHICLE_SPEED listener: true".
+- Use "Extended Controls" to change speed and verify the UI speedometer updates.
+- Verify the "Close app" overlay does not appear when driving.
