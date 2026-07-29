@@ -1,0 +1,7 @@
+- [ ] Research and refine the landscape layout for 1024x768
+- [ ] Implement compact version of Top App Bar
+- [ ] Implement compact version of System Status Card
+- [ ] Restructure `CockpitUI` to use a Row-based layout for the main body
+- [ ] Update Manual Input Bar to fit the new layout
+- [ ] Verify with `CockpitUIPreview`
+- [ ] Finalize and provide walkthrough

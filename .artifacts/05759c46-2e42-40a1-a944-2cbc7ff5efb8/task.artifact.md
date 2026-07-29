@@ -1,0 +1,6 @@
+- [ ] Update `QuickActionCard.kt` to support `enabled` state
+- [ ] Update `AutomotiveTopBar.kt` to handle `isDrivingRestricted`
+- [ ] Update `AutomotiveBottomDock.kt` to handle `isDrivingRestricted`
+- [ ] Update `ManualInputBar.kt` to handle `isDrivingRestricted`
+- [ ] Update `MainActivity.kt` to pass `isDrivingRestricted` to all components
+- [ ] Verify changes in emulator (Manual Verification)
