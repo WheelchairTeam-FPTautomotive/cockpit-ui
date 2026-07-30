@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
     private var isHvacOn = mutableStateOf(false)
     private var isDrivingRestricted = mutableStateOf(false)
     private var hasWarnedSpeed = false
+    private var safetyWarning = mutableStateOf<String?>(null)
 
     private var appLanguage = mutableStateOf(AppLanguage.VIETNAMESE)
     private var displayTheme = mutableStateOf(DisplayTheme.LIGHT)
@@ -124,28 +125,62 @@ class MainActivity : ComponentActivity() {
             val speed by carPropertyHelper.speedFlow.collectAsState()
             val hvacOn by carPropertyHelper.hvacOnFlow.collectAsState()
             val drivingRestricted by carPropertyHelper.uxRestrictionsFlow.collectAsState()
+            val activeWarning by safetyWarning
 
-            CockpitAppScreen(
-                assistantState = assistantState.value,
-                statusText = statusText.value,
-                copilotAnswer = copilotAnswer.value,
-                citations = citations.value,
-                vehicleSpeed = speed,
-                isHvacOn = hvacOn,
-                rmsLevel = rmsLevel.floatValue,
-                appLanguage = appLanguage.value,
-                displayTheme = displayTheme.value,
-                showSettingsDialog = showSettingsDialog.value,
-                isDrivingRestricted = drivingRestricted,
-                onHvacToggle = { toggleHvacProperty() },
-                onManualSend = { query -> processUserSpeech(query) },
-                onMicTap = { handleMicTap() },
-                onWakeSimulate = { triggerKeywordWake() },
-                onOpenSettings = { showSettingsDialog.value = true },
-                onCloseSettings = { showSettingsDialog.value = false },
-                onLanguageChange = { lang -> appLanguage.value = lang },
-                onThemeChange = { theme -> displayTheme.value = theme }
-            )
+            Box(modifier = Modifier.fillMaxSize()) {
+                CockpitAppScreen(
+                    assistantState = assistantState.value,
+                    statusText = statusText.value,
+                    copilotAnswer = copilotAnswer.value,
+                    citations = citations.value,
+                    vehicleSpeed = speed,
+                    isHvacOn = hvacOn,
+                    rmsLevel = rmsLevel.floatValue,
+                    appLanguage = appLanguage.value,
+                    displayTheme = displayTheme.value,
+                    showSettingsDialog = showSettingsDialog.value,
+                    isDrivingRestricted = drivingRestricted,
+                    onHvacToggle = { toggleHvacProperty() },
+                    onManualSend = { query -> processUserSpeech(query) },
+                    onMicTap = { handleMicTap() },
+                    onWakeSimulate = { triggerKeywordWake() },
+                    onOpenSettings = { showSettingsDialog.value = true },
+                    onCloseSettings = { showSettingsDialog.value = false },
+                    onLanguageChange = { lang -> appLanguage.value = lang },
+                    onThemeChange = { theme -> displayTheme.value = theme }
+                )
+
+                // Safety Warning HUD Overlay
+                activeWarning?.let { warningText ->
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = androidx.compose.ui.graphics.Color(0xFFEF4444)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .align(androidx.compose.ui.Alignment.TopCenter),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "⚠️",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = warningText,
+                                color = androidx.compose.ui.graphics.Color.White,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -398,6 +433,37 @@ class MainActivity : ComponentActivity() {
 
     private fun processUserSpeech(query: String) {
         autoSleepRunnable?.let { mainHandler.removeCallbacks(it) }
+        
+        // VHAL Speed-sensitive Safety Gate for Mirror Folding
+        val currentSpeed = carPropertyHelper.speedFlow.value
+        val isMirrorQuery = query.contains("gập gương", ignoreCase = true) || 
+                            query.contains("fold mirror", ignoreCase = true) || 
+                            query.contains("gương chiếu hậu", ignoreCase = true)
+        
+        if (isMirrorQuery && currentSpeed > 0f) {
+            val warningText = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                "Yêu cầu bị từ chối: Không thể gập gương khi xe đang di chuyển. Vui lòng dừng xe an toàn!"
+            } else {
+                "Request denied: Cannot fold mirrors while the vehicle is in motion. Please stop safely first!"
+            }
+            
+            copilotAnswer.value = warningText
+            citations.value = emptyList()
+            assistantState.value = AssistantState.IDLE
+            statusText.value = warningText
+            safetyWarning.value = warningText
+            
+            // Auto-dismiss safety warning banner after 5 seconds
+            mainHandler.postDelayed({
+                if (safetyWarning.value == warningText) {
+                    safetyWarning.value = null
+                }
+            }, 5000)
+            
+            speakOut(warningText)
+            return
+        }
+
         assistantState.value = AssistantState.PROCESSING
         statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đang hỏi Copilot: \"$query\"" else "Asking Copilot: \"$query\""
         copilotAnswer.value = ""
