@@ -34,7 +34,7 @@ You must configure an **Automotive Virtual Device (AVD)** in Android Studio to t
 
 > [!IMPORTANT]
 > **Use the non-Play Store system image (userdebug build).**  
-> System images with the Play Store are production (`user`) builds. They strictly lock down side-loaded apps and block interactions when the vehicle is in motion. A non-Play Store image (`Google APIs`) allows full VHAL simulation and debug access.
+> System images with the Play Store are production (`user`) builds. They strictly lock down side-loaded apps and block interactions when the vehicle is in motion (showing the *"You can't use this feature while driving"* screen) even if `distractionOptimized="true"` is declared, because the OS checks for official store signatures. Using a non-Play Store image (e.g. **Android Automotive with Google APIs** / AOSP build) bypasses these platform signature checks, allowing full access to VHAL simulation testing while driving.
 
 #### Step-by-Step AVD Creation:
 1. In Android Studio, open the **Device Manager** (Tools → Device Manager).
