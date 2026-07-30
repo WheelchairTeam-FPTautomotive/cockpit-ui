@@ -10,6 +10,9 @@ import android.car.drivingstate.CarUxRestrictionsManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class CarPropertyHelper(
     private val context: Context,
@@ -22,9 +25,38 @@ class CarPropertyHelper(
     private var uxRestrictionsManager: CarUxRestrictionsManager? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // Telemetry Stream Abstraction: Expose reactive StateFlow streams
+    private val _speedFlow = MutableStateFlow(0f)
+    val speedFlow: StateFlow<Float> = _speedFlow.asStateFlow()
+
+    private val _hvacOnFlow = MutableStateFlow(false)
+    val hvacOnFlow: StateFlow<Boolean> = _hvacOnFlow.asStateFlow()
+
+    private val _uxRestrictionsFlow = MutableStateFlow(false)
+    val uxRestrictionsFlow: StateFlow<Boolean> = _uxRestrictionsFlow.asStateFlow()
+
     private val vhalCallback = object : CarPropertyManager.CarPropertyEventCallback {
         override fun onChangeEvent(value: CarPropertyValue<*>) {
             Log.d("CarPropertyHelper", "VHAL property change: id=${value.propertyId}, value=${value.value}")
+            
+            // Push VHAL updates safely to state streams
+            when (value.propertyId) {
+                VehiclePropertyIds.PERF_VEHICLE_SPEED, VehiclePropertyIds.PERF_VEHICLE_SPEED_DISPLAY -> {
+                    val rawSpeed = when (val v = value.value) {
+                        is Float -> v
+                        is Int -> v.toFloat()
+                        is Double -> v.toFloat()
+                        is Number -> v.toFloat()
+                        else -> 0f
+                    }
+                    _speedFlow.value = kotlin.math.abs(rawSpeed) * 3.6f
+                }
+                VehiclePropertyIds.HVAC_AC_ON -> {
+                    if (value.value is Boolean) {
+                        _hvacOnFlow.value = value.value as Boolean
+                    }
+                }
+            }
             onSignalChanged(value.propertyId, value.value)
         }
 
@@ -66,12 +98,14 @@ class CarPropertyHelper(
             uxRestrictionsManager?.registerListener { restrictions ->
                 val isRestricted = restrictions.isRequiresDistractionOptimization || (restrictions.activeRestrictions != 0)
                 Log.i("CarPropertyHelper", "UX Restriction updated: isRestricted=$isRestricted")
+                _uxRestrictionsFlow.value = isRestricted
                 onUxRestrictionsChanged(isRestricted)
             }
             val initial = uxRestrictionsManager?.getCurrentCarUxRestrictions()
             if (initial != null) {
                 val isRestricted = initial.isRequiresDistractionOptimization || (initial.activeRestrictions != 0)
                 Log.i("CarPropertyHelper", "Initial UX Restriction state: isRestricted=$isRestricted")
+                _uxRestrictionsFlow.value = isRestricted
                 onUxRestrictionsChanged(isRestricted)
             }
         } catch (e: Exception) {
@@ -111,6 +145,8 @@ class CarPropertyHelper(
             val speedValue = manager.getProperty<Float>(VehiclePropertyIds.PERF_VEHICLE_SPEED, 0)
             if (speedValue != null) {
                 Log.i("CarPropertyHelper", "Initial SPEED value: ${speedValue.value}")
+                val speedKmh = kotlin.math.abs(speedValue.value) * 3.6f
+                _speedFlow.value = speedKmh
                 onSignalChanged(VehiclePropertyIds.PERF_VEHICLE_SPEED, speedValue.value)
             }
         } catch (e: Exception) {
@@ -136,6 +172,7 @@ class CarPropertyHelper(
         val manager = carPropertyManager ?: return
         try {
             manager.setBooleanProperty(VehiclePropertyIds.HVAC_AC_ON, areaId, turnOn)
+            _hvacOnFlow.value = turnOn
             Log.i("CarPropertyHelper", "Set HVAC HVAC_AC_ON AreaId=$areaId State=$turnOn")
         } catch (e: Exception) {
             Log.e("CarPropertyHelper", "Failed to write HVAC property: ${e.message}")

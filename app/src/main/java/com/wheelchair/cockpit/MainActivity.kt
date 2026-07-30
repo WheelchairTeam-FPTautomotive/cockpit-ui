@@ -121,18 +121,22 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
+            val speed by carPropertyHelper.speedFlow.collectAsState()
+            val hvacOn by carPropertyHelper.hvacOnFlow.collectAsState()
+            val drivingRestricted by carPropertyHelper.uxRestrictionsFlow.collectAsState()
+
             CockpitAppScreen(
                 assistantState = assistantState.value,
                 statusText = statusText.value,
                 copilotAnswer = copilotAnswer.value,
                 citations = citations.value,
-                vehicleSpeed = vehicleSpeed.floatValue,
-                isHvacOn = isHvacOn.value,
+                vehicleSpeed = speed,
+                isHvacOn = hvacOn,
                 rmsLevel = rmsLevel.floatValue,
                 appLanguage = appLanguage.value,
                 displayTheme = displayTheme.value,
                 showSettingsDialog = showSettingsDialog.value,
-                isDrivingRestricted = isDrivingRestricted.value,
+                isDrivingRestricted = drivingRestricted,
                 onHvacToggle = { toggleHvacProperty() },
                 onManualSend = { query -> processUserSpeech(query) },
                 onMicTap = { handleMicTap() },
