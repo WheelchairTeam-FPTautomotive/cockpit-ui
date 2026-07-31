@@ -436,11 +436,18 @@ class MainActivity : ComponentActivity() {
         
         // VHAL Speed-sensitive Safety Gate for Mirror Folding
         val currentSpeed = carPropertyHelper.speedFlow.value
-        val isMirrorQuery = query.contains("gập gương", ignoreCase = true) || 
-                            query.contains("fold mirror", ignoreCase = true) || 
-                            query.contains("gương chiếu hậu", ignoreCase = true)
+        val isFoldAction = query.contains("gập", ignoreCase = true) || 
+                           query.contains("đóng", ignoreCase = true) || 
+                           query.contains("thu", ignoreCase = true) || 
+                           query.contains("cất", ignoreCase = true) || 
+                           query.contains("fold", ignoreCase = true) || 
+                           query.contains("close", ignoreCase = true) || 
+                           query.contains("retract", ignoreCase = true)
+        val isMirrorTarget = query.contains("gương", ignoreCase = true) || 
+                             query.contains("mirror", ignoreCase = true)
+        val isMirrorFoldingRequest = isFoldAction && isMirrorTarget
         
-        if (isMirrorQuery && currentSpeed > 0f) {
+        if (isMirrorFoldingRequest && currentSpeed > 0f) {
             val warningText = if (appLanguage.value == AppLanguage.VIETNAMESE) {
                 "Yêu cầu bị từ chối: Không thể gập gương khi xe đang di chuyển. Vui lòng dừng xe an toàn!"
             } else {
