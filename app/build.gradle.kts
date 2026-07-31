@@ -93,4 +93,8 @@ dependencies {
 
     // Google Gemini AI SDK
     implementation("com.google.ai.client.generativeai:generativeai:0.9.0")
+
+    // Vosk Offline Speech Recognition for KWS
+    implementation("net.java.dev.jna:jna:5.13.0@aar")
+    implementation("com.alphacephei:vosk-android:0.3.38@aar")
 }

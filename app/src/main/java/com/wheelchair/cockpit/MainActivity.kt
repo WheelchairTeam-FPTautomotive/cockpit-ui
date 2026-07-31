@@ -202,7 +202,7 @@ class MainActivity : ComponentActivity() {
         if (permissionsToRequest.isNotEmpty()) {
             requestPermissions(permissionsToRequest.toTypedArray(), 101)
         } else {
-            initSpeechRecognizer()
+            initAudioRecognizers()
         }
     }
 
@@ -210,7 +210,7 @@ class MainActivity : ComponentActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 101) {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                initSpeechRecognizer()
+                initAudioRecognizers()
             }
             if (checkSelfPermission("android.car.permission.CAR_SPEED") == PackageManager.PERMISSION_GRANTED) {
                 // Trigger CarService reconnection or let it bind naturally
@@ -241,7 +241,7 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 "System Standby. Say \"Hey Car\" to activate."
                             }
-                            scheduleRestartListening(500)
+                            startVoskListening()
                         }
                     }
 
@@ -249,7 +249,7 @@ class MainActivity : ComponentActivity() {
                     override fun onError(utteranceId: String?) {
                         runOnUiThread {
                             assistantState.value = AssistantState.IDLE
-                            scheduleRestartListening(500)
+                            startVoskListening()
                         }
                     }
                 })
@@ -258,7 +258,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun speakOut(text: String) {
-        stopContinuousListening()
+        stopGoogleListening()
+        stopVoskListening()
         assistantState.value = AssistantState.SPEAKING
         
         // Dynamically update TTS language based on current setting
@@ -273,18 +274,17 @@ class MainActivity : ComponentActivity() {
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "CockpitTTS")
     }
 
-    private fun initSpeechRecognizer() {
+    private var voskModel: org.vosk.Model? = null
+    private var voskSpeechService: org.vosk.android.SpeechService? = null
+
+    private fun initAudioRecognizers() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) return
         speechRecognizer?.destroy()
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
 
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {}
-
-            override fun onBeginningOfSpeech() {
-                resetAutoSleepTimer()
-            }
-
+            override fun onBeginningOfSpeech() { resetAutoSleepTimer() }
             override fun onRmsChanged(rmsdB: Float) {
                 val normalized = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
                 rmsLevel.floatValue = normalized
@@ -292,43 +292,88 @@ class MainActivity : ComponentActivity() {
                     maxRmsInSession = normalized
                 }
             }
-
             override fun onBufferReceived(buffer: ByteArray?) {}
-
             override fun onEndOfSpeech() {}
-
             override fun onError(error: Int) {
                 rmsLevel.floatValue = 0f
-                if (isListeningSessionActive) {
-                    scheduleRestartListening(1000)
+                if (assistantState.value == AssistantState.WAKE_DETECTED) {
+                    assistantState.value = AssistantState.IDLE
+                    statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                        "Không nghe rõ (Mã lỗi: $error). Trở về Standby."
+                    } else {
+                        "Did not catch that (Error: $error). Returning to Standby."
+                    }
+                    startVoskListening()
                 }
             }
-
             override fun onResults(results: Bundle?) {
                 rmsLevel.floatValue = 0f
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 if (!matches.isNullOrEmpty()) {
                     val spokenText = matches[0]
                     handleRecognizedSpeech(spokenText)
-                } else if (isListeningSessionActive) {
-                    scheduleRestartListening(500)
+                } else if (assistantState.value == AssistantState.WAKE_DETECTED) {
+                    assistantState.value = AssistantState.IDLE
+                    startVoskListening()
                 }
             }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!matches.isNullOrEmpty()) {
-                    val partialText = matches[0]
-                    if (assistantState.value == AssistantState.IDLE && containsWakeWord(partialText)) {
-                        triggerKeywordWake()
-                    }
-                }
-            }
-
+            override fun onPartialResults(partialResults: Bundle?) {}
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })
 
-        startContinuousListening()
+        // Unpack Vosk Model
+        org.vosk.android.StorageService.unpack(this, "model-en", "model",
+            { model ->
+                voskModel = model
+                if (assistantState.value == AssistantState.IDLE) {
+                    startVoskListening()
+                }
+            },
+            { e ->
+                Log.e("CockpitUI", "Failed to unpack Vosk model", e)
+            }
+        )
+    }
+
+    private val voskListener = object : org.vosk.android.RecognitionListener {
+        override fun onPartialResult(hypothesis: String?) {
+            if (hypothesis != null) {
+                Log.d("CockpitUI", "Vosk Partial: $hypothesis")
+                if (containsWakeWord(hypothesis)) triggerKeywordWake()
+            }
+        }
+        override fun onResult(hypothesis: String?) {
+            if (hypothesis != null) {
+                Log.d("CockpitUI", "Vosk Result: $hypothesis")
+                if (containsWakeWord(hypothesis)) triggerKeywordWake()
+            }
+        }
+        override fun onFinalResult(hypothesis: String?) {}
+        override fun onError(e: Exception?) {
+            Log.e("CockpitUI", "Vosk Error", e)
+        }
+        override fun onTimeout() {}
+    }
+
+    private fun startVoskListening() {
+        if (voskModel == null || assistantState.value != AssistantState.IDLE) return
+        if (voskSpeechService != null) {
+            voskSpeechService?.startListening(voskListener)
+            return
+        }
+        try {
+            val rec = org.vosk.Recognizer(voskModel, 16000.0f)
+            voskSpeechService = org.vosk.android.SpeechService(rec, 16000.0f)
+            voskSpeechService?.startListening(voskListener)
+        } catch (e: Exception) {
+            Log.e("CockpitUI", "Failed to start Vosk", e)
+        }
+    }
+
+    private fun stopVoskListening() {
+        voskSpeechService?.cancel()
+        voskSpeechService?.shutdown()
+        voskSpeechService = null
     }
 
     private fun containsWakeWord(text: String): Boolean {
@@ -338,26 +383,30 @@ class MainActivity : ComponentActivity() {
                lower.contains("hây ca") || 
                lower.contains("hây car") || 
                lower.contains("he ca") || 
+               lower.contains("hey call") ||
+               lower.contains("hay call") ||
+               lower.contains("he call") ||
+               lower.contains("take care") ||
                lower.contains("xe ơi") || 
-               lower.contains("chào xe")
+               lower.contains("chào xe") ||
+               lower.matches(Regex(".*\\bhey\\b.*")) ||
+               lower.matches(Regex(".*\\bhi\\b.*")) ||
+               lower.matches(Regex(".*\\bhello\\b.*")) ||
+               lower.matches(Regex(".*\\bokay\\b.*")) ||
+               lower.matches(Regex(".*\\bok\\b.*"))
     }
 
-    private fun startContinuousListening() {
+    private fun startGoogleListening() {
         if (assistantState.value == AssistantState.SPEAKING) return
-        isListeningSessionActive = true
         maxRmsInSession = 0f
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            
-            // Reverted back: always listen in the selected language so "Xe ơi" works perfectly in VI mode
             val listenLang = if (appLanguage.value == AppLanguage.VIETNAMESE) "vi-VN" else "en-US"
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, listenLang)
-            
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
-
         try {
             speechRecognizer?.startListening(intent)
         } catch (e: Exception) {
@@ -365,9 +414,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun stopContinuousListening() {
-        isListeningSessionActive = false
-        restartListeningRunnable?.let { mainHandler.removeCallbacks(it) }
+    private fun stopGoogleListening() {
         autoSleepRunnable?.let { mainHandler.removeCallbacks(it) }
         try {
             speechRecognizer?.stopListening()
@@ -376,26 +423,37 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun scheduleRestartListening(delayMs: Long) {
-        restartListeningRunnable?.let { mainHandler.removeCallbacks(it) }
-        restartListeningRunnable = Runnable {
-            if (isListeningSessionActive && assistantState.value != AssistantState.SPEAKING) {
-                startContinuousListening()
-            }
-        }
-        mainHandler.postDelayed(restartListeningRunnable!!, delayMs)
-    }
-
     private fun triggerKeywordWake() {
-        assistantState.value = AssistantState.WAKE_DETECTED
-        statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
-            "Đang nghe trực tiếp. Xin mời bạn nói câu lệnh..."
-        } else {
-            "Listening directly. Please speak now..."
+        mainHandler.post {
+            if (assistantState.value != AssistantState.IDLE) return@post
+            
+            stopVoskListening()
+            
+            try {
+                val toneGen = android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 100)
+                toneGen.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 150)
+                mainHandler.postDelayed({ toneGen.release() }, 200)
+            } catch (e: Exception) {
+                Log.e("CockpitUI", "Beep error", e)
+            }
+
+            assistantState.value = AssistantState.WAKE_DETECTED
+            statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                "Dạ, tôi nghe. Xin mời bạn nói..."
+            } else {
+                "I'm listening. Please speak now..."
+            }
+            copilotAnswer.value = ""
+            citations.value = emptyList()
+            resetAutoSleepTimer()
+            
+            // Delay starting Google STT by 500ms to let Vosk release the mic completely
+            mainHandler.postDelayed({
+                if (assistantState.value == AssistantState.WAKE_DETECTED) {
+                    startGoogleListening()
+                }
+            }, 500)
         }
-        copilotAnswer.value = ""
-        citations.value = emptyList()
-        resetAutoSleepTimer()
     }
 
     private fun resetAutoSleepTimer() {
@@ -408,26 +466,18 @@ class MainActivity : ComponentActivity() {
                 } else {
                     "Timeout. Returning to System Standby."
                 }
+                startVoskListening()
             }
         }
         mainHandler.postDelayed(autoSleepRunnable!!, 10000)
     }
 
     private fun handleRecognizedSpeech(text: String) {
-        when (assistantState.value) {
-            AssistantState.IDLE -> {
-                if (containsWakeWord(text)) {
-                    triggerKeywordWake()
-                } else {
-                    scheduleRestartListening(500)
-                }
-            }
-            AssistantState.WAKE_DETECTED -> {
-                processUserSpeech(text)
-            }
-            else -> {
-                scheduleRestartListening(500)
-            }
+        if (assistantState.value == AssistantState.WAKE_DETECTED) {
+            processUserSpeech(text)
+        } else {
+            assistantState.value = AssistantState.IDLE
+            startVoskListening()
         }
     }
 
@@ -505,7 +555,7 @@ class MainActivity : ComponentActivity() {
                 tts?.stop()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đã dừng trợ lý." else "Assistant stopped."
-                startContinuousListening()
+                startVoskListening()
             }
             AssistantState.IDLE -> {
                 triggerKeywordWake()
@@ -513,6 +563,7 @@ class MainActivity : ComponentActivity() {
             AssistantState.WAKE_DETECTED -> {
                 assistantState.value = AssistantState.IDLE
                 statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đã tắt mic." else "Mic disabled."
+                startVoskListening()
             }
             AssistantState.PROCESSING -> {}
         }
@@ -520,7 +571,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        stopContinuousListening()
+        stopGoogleListening()
+        stopVoskListening()
+        voskSpeechService?.shutdown()
+        voskModel?.close()
         speechRecognizer?.destroy()
         tts?.stop()
         tts?.shutdown()

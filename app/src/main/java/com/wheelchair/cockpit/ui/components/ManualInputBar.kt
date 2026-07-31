@@ -32,6 +32,8 @@ fun ManualInputBar(
     onQueryInputChange: (String) -> Unit,
     onManualSend: (String) -> Unit
 ) {
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+
     Surface(
         modifier = Modifier.fillMaxWidth().height(52.dp),
         shape = RoundedCornerShape(14.dp),
@@ -90,12 +92,30 @@ fun ManualInputBar(
                         unfocusedPlaceholderColor = textSecondary,
                         disabledPlaceholderColor = textSecondary
                     ),
-                    singleLine = true
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Send
+                    ),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                        onSend = {
+                            if (!isDrivingRestricted && queryInput.isNotBlank() && assistantState != AssistantState.PROCESSING) {
+                                focusManager.clearFocus()
+                                onManualSend(queryInput)
+                                onQueryInputChange("")
+                            }
+                        }
+                    )
                 )
             }
             
             IconButton(
-                onClick = { if (!isDrivingRestricted) { onManualSend(queryInput); onQueryInputChange("") } },
+                onClick = { 
+                    if (!isDrivingRestricted && queryInput.isNotBlank() && assistantState != AssistantState.PROCESSING) { 
+                        focusManager.clearFocus()
+                        onManualSend(queryInput)
+                        onQueryInputChange("") 
+                    } 
+                },
                 enabled = !isDrivingRestricted && queryInput.isNotBlank() && assistantState != AssistantState.PROCESSING,
                 modifier = Modifier
                     .size(36.dp)

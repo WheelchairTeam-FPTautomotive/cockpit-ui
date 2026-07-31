@@ -14,8 +14,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wheelchair.cockpit.api.CitationInfo
@@ -81,7 +85,12 @@ fun CopilotResponsePanel(
                 if (copilotAnswer.isNotEmpty()) {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         item {
-                            Text(text = copilotAnswer, fontSize = 15.sp, color = textMain, lineHeight = 21.sp)
+                            Text(
+                                text = parseMarkdownToAnnotatedString(copilotAnswer, textMain), 
+                                fontSize = 15.sp, 
+                                color = textMain, 
+                                lineHeight = 21.sp
+                            )
                             Spacer(modifier = Modifier.height(12.dp))
                         }
                         items(citations) { citation ->
@@ -109,6 +118,30 @@ fun CopilotResponsePanel(
                     }
                 }
             }
+        }
+    }
+}
+
+fun parseMarkdownToAnnotatedString(text: String, mainColor: Color): AnnotatedString {
+    return buildAnnotatedString {
+        var currentIndex = 0
+        val boldRegex = Regex("\\*\\*(.*?)\\*\\*")
+        // Replace markdown bullets with nice Unicode bullets
+        val cleanedText = text.replace(Regex("^\\s*\\* ", RegexOption.MULTILINE), "• ")
+                              .replace(Regex("^\\s*- ", RegexOption.MULTILINE), "• ")
+        
+        val matches = boldRegex.findAll(cleanedText)
+        
+        for (match in matches) {
+            append(cleanedText.substring(currentIndex, match.range.first))
+            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold, color = mainColor)) {
+                append(match.groupValues[1])
+            }
+            currentIndex = match.range.last + 1
+        }
+        
+        if (currentIndex < cleanedText.length) {
+            append(cleanedText.substring(currentIndex))
         }
     }
 }
