@@ -110,6 +110,13 @@ For the voice assistant to listen to audio input, grant microphone permissions v
 adb shell pm grant com.wheelchair.cockpit android.permission.RECORD_AUDIO
 ```
 
+Also enable host mic on the emulator every cold boot:
+
+1. Emulator **⋯ Extended controls → Microphone**
+2. Turn on **Virtual microphone uses host audio input**
+
+Or: `adb emu avd hostmicon`
+
 ---
 
 ## 📂 Project Architecture
@@ -188,3 +195,17 @@ To test the Driver Distraction UI locks on **Carsky**, use the following ADB com
   ```bash
   adb shell pm grant com.wheelchair.cockpit android.permission.RECORD_AUDIO
   ```
+* **Emulator host mic**: Extended controls → Microphone → **Virtual microphone uses host audio input** (re-enable after cold boot).
+* **How to tell what failed**:
+  * **Waveform moves** while talking → mic audio reaches the app.
+  * **Live caption** (italic text under waveform) updates → STT partials are working.
+  * Flat waveform → host mic off, permission denied, or listening session not started.
+  * Moving waveform but no caption forever → OEM/AVD may not emit partials; final result should still work; UI stays on "Listening…".
+
+#### Q3: Where is query latency?
+
+* Enable **Developer mode** in System Settings (debug builds). After a Copilot query, the response panel shows `Query Nms` (and `Health Nms` after a health check). Latency is hidden when developer mode is off.
+
+#### Q4: Where are the citation / bibliography cards?
+
+* Citation cards are **evidence for developers/judges**. They appear only when **Developer mode** is enabled. Drivers see the short spoken answer only; the API still returns `citations` for the backend.
