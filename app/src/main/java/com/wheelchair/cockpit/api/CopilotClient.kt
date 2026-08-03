@@ -1,5 +1,7 @@
 package com.wheelchair.cockpit.api
 
+import com.wheelchair.cockpit.dev.DevSettings
+import com.wheelchair.cockpit.dev.DevSettingsStore
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -17,7 +19,10 @@ interface CopilotService {
     suspend fun queryCopilot(@Body request: QueryRequest): QueryResponse
 }
 
-data class QueryRequest(val query: String)
+data class QueryRequest(
+    val query: String,
+    val language: String = "vi"
+)
 
 data class CitationInfo(
     val document_id: String,
@@ -35,30 +40,59 @@ data class QueryResponse(
     val status: String
 )
 
+// --- START MODIFICATION ---
+// Singleton Retrofit client. Host overrides go through DynamicHostInterceptor.
 object CopilotClient {
-    // Port 8000 mapped from local RAG backend. 
-    // In Android Emulator, 10.0.2.2 points to host's localhost loopback.
-    const val BASE_URL = "http://10.0.2.2:8000/"
+    const val BASE_URL = DevSettings.DEFAULT_BASE_URL
 
-    private val okHttpClient: OkHttpClient by lazy {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+    @Volatile
+    private var initialized = false
+
+    private lateinit var loggingInterceptor: HttpLoggingInterceptor
+    private lateinit var okHttpClient: OkHttpClient
+    private lateinit var retrofitService: CopilotService
+
+    fun init(store: DevSettingsStore) {
+        if (initialized) {
+            applyLogLevel(store.current())
+            return
         }
-        OkHttpClient.Builder()
-            .addInterceptor(logging)
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .build()
+        synchronized(this) {
+            if (initialized) {
+                applyLogLevel(store.current())
+                return
+            }
+            loggingInterceptor = HttpLoggingInterceptor().apply {
+                level = store.current().effectiveHttpLogLevel.toOkHttpLevel()
+            }
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor(DynamicHostInterceptor(store))
+                .addInterceptor(loggingInterceptor)
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(120, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .build()
+
+            retrofitService = Retrofit.Builder()
+                .baseUrl(BASE_URL)
+                .client(okHttpClient)
+                .addConverterFactory(GsonConverterFactory.create())
+                .build()
+                .create(CopilotService::class.java)
+
+            initialized = true
+        }
     }
 
-    val service: CopilotService by lazy {
-        Retrofit.Builder()
-            .baseUrl(BASE_URL)
-            .client(okHttpClient)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(CopilotService::class.java)
+    fun applyLogLevel(settings: DevSettings) {
+        if (!::loggingInterceptor.isInitialized) return
+        loggingInterceptor.level = settings.effectiveHttpLogLevel.toOkHttpLevel()
     }
+
+    val service: CopilotService
+        get() {
+            check(initialized) { "CopilotClient.init(store) must be called before use" }
+            return retrofitService
+        }
 }
-
+// --- END MODIFICATION ---

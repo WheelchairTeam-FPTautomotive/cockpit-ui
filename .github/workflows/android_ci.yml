@@ -13,20 +13,49 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # --- START MODIFICATION ---
+      # Skip lint/compile/assemble when app sources + Gradle inputs are unchanged.
+      # Keyed APK cache: hit → restore previous debug APK; miss → full rebuild then save.
+      - name: Restore cached Debug APK
+        id: apk-cache
+        uses: actions/cache@v4
+        with:
+          path: app/build/outputs/apk/debug/app-debug.apk
+          key: cockpit-apk-jdk17-${{ hashFiles('app/src/**', 'app/build.gradle.kts', 'build.gradle.kts', 'settings.gradle.kts', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties', 'gradle/**/*.kts', '.github/workflows/android_ci.yml') }}
+      # --- END MODIFICATION ---
+
       - name: Set up JDK 17
+        if: steps.apk-cache.outputs.cache-hit != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
           cache: 'gradle'
 
+      # --- START MODIFICATION ---
+      # Extra Gradle caches (wrapper + build-cache) speed rebuilds when the APK key misses.
+      - name: Restore Gradle caches
+        if: steps.apk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+      # --- END MODIFICATION ---
+
       - name: Grant Execute Permission to Gradlew
+        if: steps.apk-cache.outputs.cache-hit != 'true'
         run: chmod +x gradlew
 
       - name: Run Lint and Compile
+        if: steps.apk-cache.outputs.cache-hit != 'true'
         run: ./gradlew lintDebug compileDebugSources --no-daemon
 
       - name: Build Debug APK
+        if: steps.apk-cache.outputs.cache-hit != 'true'
         run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload Debug APK Artifact
@@ -35,3 +64,11 @@ jobs:
           name: cockpit-ui-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Report cache status
+        run: |
+          if [ "${{ steps.apk-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "APK cache HIT — skipped Gradle lint/compile/assemble; reused prior identical build."
+          else
+            echo "APK cache MISS — full build ran; APK stored for next identical tree."
+          fi

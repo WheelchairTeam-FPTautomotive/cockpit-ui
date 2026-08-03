@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -28,7 +29,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.wheelchair.cockpit.api.CitationInfo
 import com.wheelchair.cockpit.api.CopilotClient
-import com.wheelchair.cockpit.api.QueryRequest
+import com.wheelchair.cockpit.data.CopilotRepository
+import com.wheelchair.cockpit.data.HealthResult
+import com.wheelchair.cockpit.dev.DevSettings
+import com.wheelchair.cockpit.dev.DevSettingsStore
+import com.wheelchair.cockpit.dev.HttpLogLevel
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.AssistantState
 import com.wheelchair.cockpit.model.DisplayTheme
@@ -36,6 +41,9 @@ import com.wheelchair.cockpit.ui.components.*
 import com.wheelchair.cockpit.ui.dialogs.SystemSettingsDialog
 import com.wheelchair.cockpit.ui.theme.CockpitColors
 import com.wheelchair.cockpit.vhal.CarPropertyHelper
+import com.wheelchair.cockpit.voice.MicDiag
+import com.wheelchair.cockpit.voice.PartialTranscriptPublisher
+import com.wheelchair.cockpit.voice.label
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -44,6 +52,10 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
 
     private lateinit var carPropertyHelper: CarPropertyHelper
+    // --- START MODIFICATION ---
+    private lateinit var devSettingsStore: DevSettingsStore
+    private lateinit var copilotRepository: CopilotRepository
+    // --- END MODIFICATION ---
 
     private var tts: TextToSpeech? = null
     private var speechRecognizer: SpeechRecognizer? = null
@@ -67,6 +79,16 @@ class MainActivity : ComponentActivity() {
     private var displayTheme = mutableStateOf(DisplayTheme.LIGHT)
     private var showSettingsDialog = mutableStateOf(false)
     private var geminiApiKey = mutableStateOf("")
+    // --- START MODIFICATION ---
+    private var healthResult = mutableStateOf<HealthResult?>(null)
+    private var healthChecking = mutableStateOf(false)
+    private var partialTranscript = mutableStateOf("")
+    private var micDiagStatus = mutableStateOf(MicDiag.IDLE)
+    private var lastQueryLatencyMs = mutableStateOf<Long?>(null)
+    private val partialPublisher = PartialTranscriptPublisher(mainHandler = mainHandler) { text ->
+        partialTranscript.value = text
+    }
+    // --- END MODIFICATION ---
 
     private var autoSleepRunnable: Runnable? = null
     private var maxRmsInSession = 0f
@@ -74,6 +96,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         geminiApiKey.value = BuildConfig.GEMINI_API_KEY.ifEmpty { "ai_studio_api_key_here" }
+
+        // --- START MODIFICATION ---
+        // Wire DataStore + repository before any network call.
+        devSettingsStore = DevSettingsStore(this)
+        CopilotClient.init(devSettingsStore)
+        copilotRepository = CopilotRepository(devSettingsStore)
+        // --- END MODIFICATION ---
 
         checkAudioPermissions()
         initTextToSpeech()
@@ -115,7 +144,8 @@ class MainActivity : ComponentActivity() {
             onUxRestrictionsChanged = { isRestricted ->
                 runOnUiThread {
                     isDrivingRestricted.value = isRestricted
-                    if (isRestricted) {
+                    // MODIFIED: honor developer-mode driving bypass
+                    if (isRestricted && !devSettingsStore.current().effectiveBypassDrivingLock) {
                         showSettingsDialog.value = false
                     }
                 }
@@ -127,6 +157,15 @@ class MainActivity : ComponentActivity() {
             val hvacOn by carPropertyHelper.hvacOnFlow.collectAsState()
             val drivingRestricted by carPropertyHelper.uxRestrictionsFlow.collectAsState()
             val activeWarning by safetyWarning
+            // --- START MODIFICATION ---
+            val devSettings by devSettingsStore.settings.collectAsState()
+            LaunchedEffect(devSettings) {
+                CopilotClient.applyLogLevel(devSettings)
+            }
+            val effectiveDrivingRestricted =
+                drivingRestricted &&
+                    !(BuildConfig.DEBUG && devSettings.effectiveBypassDrivingLock)
+            // --- END MODIFICATION ---
 
             Box(modifier = Modifier.fillMaxSize()) {
                 CockpitAppScreen(
@@ -140,7 +179,7 @@ class MainActivity : ComponentActivity() {
                     appLanguage = appLanguage.value,
                     displayTheme = displayTheme.value,
                     showSettingsDialog = showSettingsDialog.value,
-                    isDrivingRestricted = drivingRestricted,
+                    isDrivingRestricted = effectiveDrivingRestricted,
                     onHvacToggle = { toggleHvacProperty() },
                     onManualSend = { query -> processUserSpeech(query) },
                     onMicTap = { handleMicTap() },
@@ -148,7 +187,43 @@ class MainActivity : ComponentActivity() {
                     onOpenSettings = { showSettingsDialog.value = true },
                     onCloseSettings = { showSettingsDialog.value = false },
                     onLanguageChange = { lang -> appLanguage.value = lang },
-                    onThemeChange = { theme -> displayTheme.value = theme }
+                    onThemeChange = { theme -> displayTheme.value = theme },
+                    // --- START MODIFICATION ---
+                    showDeveloperControls = BuildConfig.DEBUG,
+                    devSettings = devSettings,
+                    healthResult = healthResult.value,
+                    healthChecking = healthChecking.value,
+                    onDeveloperModeChange = { enabled ->
+                        CoroutineScope(Dispatchers.IO).launch {
+                            devSettingsStore.setDeveloperModeEnabled(enabled)
+                        }
+                    },
+                    onBaseUrlApply = { url ->
+                        CoroutineScope(Dispatchers.IO).launch {
+                            devSettingsStore.setBaseUrl(url)
+                        }
+                    },
+                    onMockRagChange = { enabled ->
+                        CoroutineScope(Dispatchers.IO).launch {
+                            devSettingsStore.setMockRagEnabled(enabled)
+                        }
+                    },
+                    onBypassDrivingChange = { enabled ->
+                        CoroutineScope(Dispatchers.IO).launch {
+                            devSettingsStore.setBypassDrivingLock(enabled)
+                        }
+                    },
+                    onHttpLogLevelChange = { level ->
+                        CoroutineScope(Dispatchers.IO).launch {
+                            devSettingsStore.setHttpLogLevel(level)
+                        }
+                    },
+                    onHealthCheck = { runHealthCheck() },
+                    // --- START MODIFICATION ---
+                    partialTranscript = partialTranscript.value,
+                    micDiagLabel = micDiagStatus.value.label(appLanguage.value),
+                    lastQueryLatencyMs = lastQueryLatencyMs.value
+                    // --- END MODIFICATION ---
                 )
 
                 // Safety Warning HUD Overlay
@@ -201,6 +276,10 @@ class MainActivity : ComponentActivity() {
         }
 
         if (permissionsToRequest.isNotEmpty()) {
+            // MODIFIED: surface mic denial until grant completes
+            if (permissionsToRequest.contains(Manifest.permission.RECORD_AUDIO)) {
+                micDiagStatus.value = MicDiag.PERMISSION_DENIED
+            }
             requestPermissions(permissionsToRequest.toTypedArray(), 101)
         } else {
             initAudioRecognizers()
@@ -212,9 +291,16 @@ class MainActivity : ComponentActivity() {
         if (requestCode == 101) {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                 initAudioRecognizers()
+            } else {
+                // MODIFIED: keep denial visible in Siri-style mic diag
+                micDiagStatus.value = MicDiag.PERMISSION_DENIED
+                statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                    "Cần quyền micro để nhận giọng nói."
+                } else {
+                    "Microphone permission required for voice input."
+                }
             }
             if (checkSelfPermission("android.car.permission.CAR_SPEED") == PackageManager.PERMISSION_GRANTED) {
-                // Trigger CarService reconnection or let it bind naturally
                 Log.i("CockpitUI", "CAR_SPEED permission granted.")
             }
         }
@@ -327,48 +413,82 @@ class MainActivity : ComponentActivity() {
     private var voskSpeechService: org.vosk.android.SpeechService? = null
 
     private fun initAudioRecognizers() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
-        speechRecognizer?.destroy()
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        // --- START MODIFICATION ---
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            micDiagStatus.value = MicDiag.PERMISSION_DENIED
+            return
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            micDiagStatus.value = MicDiag.STT_UNAVAILABLE
+            statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                "STT không khả dụng trên thiết bị này."
+            } else {
+                "Speech recognition is unavailable on this device."
+            }
+            // Still unpack Vosk for wake-word if possible
+        } else {
+            micDiagStatus.value = MicDiag.OK
+            speechRecognizer?.destroy()
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
 
-        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() { resetAutoSleepTimer() }
-            override fun onRmsChanged(rmsdB: Float) {
-                val normalized = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
-                rmsLevel.floatValue = normalized
-                if (normalized > maxRmsInSession) {
-                    maxRmsInSession = normalized
+            speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    micDiagStatus.value = MicDiag.LISTENING
                 }
-            }
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onError(error: Int) {
-                rmsLevel.floatValue = 0f
-                if (assistantState.value == AssistantState.WAKE_DETECTED) {
-                    assistantState.value = AssistantState.IDLE
+                override fun onBeginningOfSpeech() {
+                    resetAutoSleepTimer()
                     statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
-                        "Không nghe rõ (Mã lỗi: $error). Trở về Standby."
+                        "Đang nghe bạn…"
                     } else {
-                        "Did not catch that (Error: $error). Returning to Standby."
+                        "Hearing you…"
                     }
-                    startVoskListening()
                 }
-            }
-            override fun onResults(results: Bundle?) {
-                rmsLevel.floatValue = 0f
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!matches.isNullOrEmpty()) {
-                    val spokenText = matches[0]
-                    handleRecognizedSpeech(spokenText)
-                } else if (assistantState.value == AssistantState.WAKE_DETECTED) {
-                    assistantState.value = AssistantState.IDLE
-                    startVoskListening()
+                override fun onRmsChanged(rmsdB: Float) {
+                    val normalized = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+                    rmsLevel.floatValue = normalized
+                    if (normalized > maxRmsInSession) {
+                        maxRmsInSession = normalized
+                    }
                 }
-            }
-            override fun onPartialResults(partialResults: Bundle?) {}
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+                override fun onError(error: Int) {
+                    rmsLevel.floatValue = 0f
+                    partialPublisher.clear()
+                    if (assistantState.value == AssistantState.WAKE_DETECTED) {
+                        assistantState.value = AssistantState.IDLE
+                        micDiagStatus.value = MicDiag.OK
+                        statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                            "Không nghe rõ (Mã lỗi: $error). Trở về Standby."
+                        } else {
+                            "Did not catch that (Error: $error). Returning to Standby."
+                        }
+                        startVoskListening()
+                    }
+                }
+                override fun onResults(results: Bundle?) {
+                    rmsLevel.floatValue = 0f
+                    partialPublisher.clear()
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    if (!matches.isNullOrEmpty()) {
+                        val spokenText = matches[0]
+                        handleRecognizedSpeech(spokenText)
+                    } else if (assistantState.value == AssistantState.WAKE_DETECTED) {
+                        assistantState.value = AssistantState.IDLE
+                        micDiagStatus.value = MicDiag.OK
+                        startVoskListening()
+                    }
+                }
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    if (!matches.isNullOrEmpty()) {
+                        partialPublisher.offer(matches[0])
+                    }
+                }
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+        }
+        // --- END MODIFICATION ---
 
         // Unpack Vosk Model
         org.vosk.android.StorageService.unpack(this, "model-en", "model",
@@ -487,6 +607,8 @@ class MainActivity : ComponentActivity() {
             }
 
             assistantState.value = AssistantState.WAKE_DETECTED
+            micDiagStatus.value = MicDiag.LISTENING
+            partialPublisher.clear()
             statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
                 "Dạ, tôi nghe. Xin mời bạn nói..."
             } else {
@@ -510,6 +632,9 @@ class MainActivity : ComponentActivity() {
         autoSleepRunnable = Runnable {
             if (assistantState.value == AssistantState.WAKE_DETECTED) {
                 assistantState.value = AssistantState.IDLE
+                // MODIFIED: clear Siri caption + restore mic diag on listen timeout
+                partialPublisher.clear()
+                micDiagStatus.value = MicDiag.OK
                 statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
                     "Hết thời gian chờ. Trở về trạng thái Standby."
                 } else {
@@ -574,11 +699,20 @@ class MainActivity : ComponentActivity() {
         statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đang hỏi Copilot: \"$query\"" else "Asking Copilot: \"$query\""
         copilotAnswer.value = ""
         citations.value = emptyList()
+        partialPublisher.clear()
 
+        // --- START MODIFICATION ---
+        // Query path through repository; publish latency only in developer mode.
         CoroutineScope(Dispatchers.IO).launch {
+            val started = SystemClock.elapsedRealtime()
             try {
-                val response = CopilotClient.service.queryCopilot(QueryRequest(query = query))
+                val langCode = if (appLanguage.value == AppLanguage.VIETNAMESE) "vi" else "en"
+                val response = copilotRepository.sendQuery(query, language = langCode)
+                val elapsed = SystemClock.elapsedRealtime() - started
                 runOnUiThread {
+                    if (devSettingsStore.current().developerModeEnabled) {
+                        lastQueryLatencyMs.value = elapsed
+                    }
                     copilotAnswer.value = response.answer
                     citations.value = response.citations
                     if (response.audio_base64 != null) {
@@ -589,7 +723,11 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 Log.e("CockpitUI", "Backend Error", e)
+                val elapsed = SystemClock.elapsedRealtime() - started
                 runOnUiThread {
+                    if (devSettingsStore.current().developerModeEnabled) {
+                        lastQueryLatencyMs.value = elapsed
+                    }
                     val fallback = if (appLanguage.value == AppLanguage.VIETNAMESE) {
                         "Lỗi kết nối Server: ${e.localizedMessage}"
                     } else {
@@ -600,7 +738,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // --- END MODIFICATION ---
     }
+
+    // --- START MODIFICATION ---
+    private fun runHealthCheck() {
+        healthChecking.value = true
+        CoroutineScope(Dispatchers.IO).launch {
+            val result = copilotRepository.checkHealth()
+            runOnUiThread {
+                healthResult.value = result
+                healthChecking.value = false
+            }
+        }
+    }
+    // --- END MODIFICATION ---
 
     private fun handleMicTap() {
         when (assistantState.value) {
@@ -655,7 +807,23 @@ fun CockpitAppScreen(
     onOpenSettings: () -> Unit,
     onCloseSettings: () -> Unit,
     onLanguageChange: (AppLanguage) -> Unit,
-    onThemeChange: (DisplayTheme) -> Unit
+    onThemeChange: (DisplayTheme) -> Unit,
+    // --- START MODIFICATION ---
+    showDeveloperControls: Boolean = false,
+    devSettings: DevSettings = DevSettings(),
+    healthResult: HealthResult? = null,
+    healthChecking: Boolean = false,
+    onDeveloperModeChange: (Boolean) -> Unit = {},
+    onBaseUrlApply: (String) -> Unit = {},
+    onMockRagChange: (Boolean) -> Unit = {},
+    onBypassDrivingChange: (Boolean) -> Unit = {},
+    onHttpLogLevelChange: (HttpLogLevel) -> Unit = {},
+    onHealthCheck: () -> Unit = {},
+    // --- START MODIFICATION ---
+    partialTranscript: String = "",
+    micDiagLabel: String = "",
+    lastQueryLatencyMs: Long? = null
+    // --- END MODIFICATION ---
 ) {
     var queryInput by remember { mutableStateOf("") }
     var activeNavIndex by remember { mutableIntStateOf(0) }
@@ -794,7 +962,16 @@ fun CockpitAppScreen(
                     textMain = textMain,
                     textSecondary = textSecondary,
                     outlineVariant = outlineVariant,
-                    modifier = Modifier.weight(2.6f)
+                    modifier = Modifier.weight(2.6f),
+                    // --- START MODIFICATION ---
+                    partialTranscript = partialTranscript,
+                    micDiagLabel = micDiagLabel,
+                    isDrivingRestricted = isDrivingRestricted,
+                    showLatency = showDeveloperControls && devSettings.developerModeEnabled,
+                    showEvidence = showDeveloperControls && devSettings.developerModeEnabled,
+                    lastQueryLatencyMs = lastQueryLatencyMs,
+                    lastHealthLatencyMs = healthResult?.latencyMs
+                    // --- END MODIFICATION ---
                 )
             }
         }
@@ -824,7 +1001,22 @@ fun CockpitAppScreen(
             outlineVariant = outlineVariant,
             onClose = onCloseSettings,
             onLanguageChange = onLanguageChange,
-            onThemeChange = onThemeChange
+            onThemeChange = onThemeChange,
+            // --- START MODIFICATION ---
+            showDeveloperControls = showDeveloperControls,
+            devSettings = devSettings,
+            healthResult = healthResult,
+            healthChecking = healthChecking,
+            onDeveloperModeChange = onDeveloperModeChange,
+            onBaseUrlApply = onBaseUrlApply,
+            onMockRagChange = onMockRagChange,
+            onBypassDrivingChange = onBypassDrivingChange,
+            onHttpLogLevelChange = onHttpLogLevelChange,
+            onHealthCheck = onHealthCheck,
+            appVersionName = BuildConfig.VERSION_NAME,
+            // --- START MODIFICATION ---
+            lastQueryLatencyMs = lastQueryLatencyMs
+            // --- END MODIFICATION ---
         )
     }
 }

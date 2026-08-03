@@ -17,8 +17,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,8 +41,19 @@ fun CopilotResponsePanel(
     textMain: Color,
     textSecondary: Color,
     outlineVariant: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // --- START MODIFICATION ---
+    partialTranscript: String = "",
+    micDiagLabel: String = "",
+    isDrivingRestricted: Boolean = false,
+    showLatency: Boolean = false,
+    showEvidence: Boolean = false,
+    lastQueryLatencyMs: Long? = null,
+    lastHealthLatencyMs: Long? = null
+    // --- END MODIFICATION ---
 ) {
+    val vi = appLanguage == AppLanguage.VIETNAMESE
+
     Surface(
         modifier = modifier.fillMaxHeight(),
         shape = RoundedCornerShape(16.dp),
@@ -57,28 +70,54 @@ fun CopilotResponsePanel(
                     Icon(Icons.Rounded.SmartToy, null, tint = primaryBlue, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (appLanguage == AppLanguage.VIETNAMESE) "TRẢ LỜI TỪ AI COPILOT" else "COPILOT RESPONSE",
+                        text = if (vi) "TRẢ LỜI TỪ AI COPILOT" else "COPILOT RESPONSE",
                         fontSize = 11.sp, fontWeight = FontWeight.Bold, color = primaryBlue, letterSpacing = 1.sp
                     )
                 }
-                
-                // Sleek Voice Waveform Badge Pill
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = primaryBlue.copy(alpha = 0.12f),
-                    border = BorderStroke(1.dp, primaryBlue.copy(alpha = 0.25f))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    StitchVoiceWaveform(
-                        rmsLevel = rmsLevel,
-                        primaryColor = primaryBlue,
-                        modifier = Modifier
-                            .width(70.dp)
-                            .height(20.dp)
-                            .padding(horizontal = 6.dp, vertical = 3.dp)
-                    )
+                    // --- START MODIFICATION ---
+                    if (showLatency && (lastQueryLatencyMs != null || lastHealthLatencyMs != null)) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = primaryBlue.copy(alpha = 0.10f),
+                            border = BorderStroke(1.dp, primaryBlue.copy(alpha = 0.22f))
+                        ) {
+                            Text(
+                                text = buildString {
+                                    lastQueryLatencyMs?.let { append("Query ${it}ms") }
+                                    if (lastQueryLatencyMs != null && lastHealthLatencyMs != null) append(" · ")
+                                    lastHealthLatencyMs?.let { append("Health ${it}ms") }
+                                },
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = primaryBlue
+                            )
+                        }
+                    }
+                    // --- END MODIFICATION ---
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = primaryBlue.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, primaryBlue.copy(alpha = 0.25f))
+                    ) {
+                        StitchVoiceWaveform(
+                            rmsLevel = rmsLevel,
+                            primaryColor = primaryBlue,
+                            modifier = Modifier
+                                .width(70.dp)
+                                .height(20.dp)
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                        )
+                    }
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(10.dp))
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -86,16 +125,21 @@ fun CopilotResponsePanel(
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         item {
                             Text(
-                                text = parseMarkdownToAnnotatedString(copilotAnswer, textMain), 
-                                fontSize = 15.sp, 
-                                color = textMain, 
+                                text = parseMarkdownToAnnotatedString(copilotAnswer, textMain),
+                                fontSize = 15.sp,
+                                color = textMain,
                                 lineHeight = 21.sp
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                         }
-                        items(citations) { citation ->
-                            CitationCard(citation, primaryBlue, textMain, surfaceContainer, outlineVariant)
+                        // --- START MODIFICATION ---
+                        // Bibliography / evidence cards: developer mode only
+                        if (showEvidence) {
+                            items(citations) { citation ->
+                                CitationCard(citation, primaryBlue, textMain, surfaceContainer, outlineVariant)
+                            }
                         }
+                        // --- END MODIFICATION ---
                     }
                 } else {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -105,16 +149,39 @@ fun CopilotResponsePanel(
                             modifier = Modifier.fillMaxWidth(0.6f).height(48.dp)
                         )
                         Spacer(modifier = Modifier.height(12.dp))
+
+                        // --- START MODIFICATION ---
+                        val fallback = when (assistantState) {
+                            AssistantState.PROCESSING -> if (vi) "Đang suy nghĩ..." else "Analyzing..."
+                            else -> if (vi) "Đang lắng nghe..." else "Listening..."
+                        }
+                        val caption = partialTranscript.ifBlank { fallback }
+                        val isPartial = partialTranscript.isNotBlank()
                         Text(
-                            text = if (assistantState == AssistantState.PROCESSING) {
-                                if (appLanguage == AppLanguage.VIETNAMESE) "Đang suy nghĩ..." else "Analyzing..."
+                            text = caption,
+                            fontSize = if (isPartial) 15.sp else 14.sp,
+                            fontStyle = if (isPartial) FontStyle.Italic else FontStyle.Normal,
+                            fontWeight = if (isPartial) FontWeight.Medium else FontWeight.Normal,
+                            color = if (isPartial) {
+                                textSecondary.copy(alpha = if (isDrivingRestricted) 0.45f else 0.75f)
                             } else {
-                                if (appLanguage == AppLanguage.VIETNAMESE) "Đang lắng nghe..." else "Listening..."
+                                textSecondary
                             },
-                            fontSize = 14.sp,
-                            color = textSecondary,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
+                            maxLines = if (isDrivingRestricted) 1 else 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 12.dp)
                         )
+                        if (micDiagLabel.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = micDiagLabel,
+                                fontSize = 11.sp,
+                                color = textSecondary.copy(alpha = 0.7f),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                        // --- END MODIFICATION ---
                     }
                 }
             }
@@ -126,20 +193,14 @@ fun parseMarkdownToAnnotatedString(text: String, mainColor: Color): AnnotatedStr
     return buildAnnotatedString {
         var currentIndex = 0
         val boldRegex = Regex("\\*\\*(.*?)\\*\\*")
-        // Replace markdown bullets with nice Unicode bullets
         val cleanedText = text.replace(Regex("^\\s*\\* ", RegexOption.MULTILINE), "• ")
-                              .replace(Regex("^\\s*- ", RegexOption.MULTILINE), "• ")
-        
-        val matches = boldRegex.findAll(cleanedText)
-        
-        for (match in matches) {
+        boldRegex.findAll(cleanedText).forEach { match ->
             append(cleanedText.substring(currentIndex, match.range.first))
-            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold, color = mainColor)) {
+            withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = mainColor)) {
                 append(match.groupValues[1])
             }
             currentIndex = match.range.last + 1
         }
-        
         if (currentIndex < cleanedText.length) {
             append(cleanedText.substring(currentIndex))
         }
