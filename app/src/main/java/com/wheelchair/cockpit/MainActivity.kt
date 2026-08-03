@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private var isListeningSessionActive = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private var restartListeningRunnable: Runnable? = null
+    private var backendMediaPlayer: android.media.MediaPlayer? = null
 
     private var assistantState = mutableStateOf(AssistantState.IDLE)
     private var statusText = mutableStateOf("System Standby. Say \"Hey Car\" to activate.")
@@ -257,6 +258,35 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun playBase64Audio(base64Audio: String, fallbackText: String) {
+        try {
+            stopGoogleListening()
+            stopVoskListening()
+            tts?.stop()
+            assistantState.value = AssistantState.SPEAKING
+            
+            val audioBytes = android.util.Base64.decode(base64Audio, android.util.Base64.DEFAULT)
+            val tempFile = java.io.File(cacheDir, "response_audio.mp3")
+            java.io.FileOutputStream(tempFile).use { it.write(audioBytes) }
+            
+            backendMediaPlayer?.release()
+            backendMediaPlayer = android.media.MediaPlayer().apply {
+                setDataSource(tempFile.absolutePath)
+                prepare()
+                start()
+                setOnCompletionListener {
+                    runOnUiThread {
+                        assistantState.value = AssistantState.IDLE
+                        startVoskListening()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("CockpitUI", "Error playing base64 audio", e)
+            speakOut(fallbackText) // Fallback to local TTS
+        }
+    }
+
     private fun speakOut(text: String) {
         stopGoogleListening()
         stopVoskListening()
@@ -269,9 +299,28 @@ class MainActivity : ComponentActivity() {
             tts?.setLanguage(Locale.US)
         }
 
+        // Hackathon trick: Phonetic replacement for basic AOSP TTS
+        var speakText = text
+        if (appLanguage.value == AppLanguage.VIETNAMESE) {
+            speakText = speakText
+                .replace(Regex("\\bAC\\b"), "Ây Xi")
+                .replace(Regex("\\bHVAC\\b"), "Hát Vát")
+                .replace(Regex("\\bADAS\\b"), "Ây Đát")
+                .replace(Regex("\\bGPS\\b"), "Gờ Pê Ét")
+                .replace(Regex("\\bCopilot\\b", RegexOption.IGNORE_CASE), "Cô Pai Lọt")
+                .replace(Regex("\\bBluetooth\\b", RegexOption.IGNORE_CASE), "Bờ Lu Tút")
+        } else {
+            // English TTS reading Vietnamese words
+            speakText = speakText
+                .replace(Regex("\\bHà Nội\\b", RegexOption.IGNORE_CASE), "Ha-Noy")
+                .replace(Regex("\\bViệt Nam\\b", RegexOption.IGNORE_CASE), "Vee-etnahm")
+                .replace(Regex("\\bHồ Chí Minh\\b", RegexOption.IGNORE_CASE), "Ho Chee Min")
+                .replace(Regex("\\bđiều hòa\\b", RegexOption.IGNORE_CASE), "deew hwa")
+        }
+
         val params = Bundle()
         params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "CockpitTTS")
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "CockpitTTS")
+        tts?.speak(speakText, TextToSpeech.QUEUE_FLUSH, params, "CockpitTTS")
     }
 
     private var voskModel: org.vosk.Model? = null
@@ -532,7 +581,11 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     copilotAnswer.value = response.answer
                     citations.value = response.citations
-                    speakOut(response.answer)
+                    if (response.audio_base64 != null) {
+                        playBase64Audio(response.audio_base64, response.answer)
+                    } else {
+                        speakOut(response.answer)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("CockpitUI", "Backend Error", e)

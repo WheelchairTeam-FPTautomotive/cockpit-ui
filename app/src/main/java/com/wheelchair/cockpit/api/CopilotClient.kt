@@ -30,6 +30,7 @@ data class CitationInfo(
 data class QueryResponse(
     val query: String,
     val answer: String,
+    val audio_base64: String? = null,
     val citations: List<CitationInfo>,
     val status: String
 )
