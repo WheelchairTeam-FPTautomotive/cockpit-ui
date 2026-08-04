@@ -375,13 +375,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun speakOut(text: String) {
+    private fun speakOut(text: String, forceEnglish: Boolean = false) {
         stopGoogleListening()
         stopVoskListening()
         assistantState.value = AssistantState.SPEAKING
         
         // Auto-detect language based on text content (Vietnamese diacritics)
-        val isVietnamese = Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        val isVietnamese = if (forceEnglish) false else Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(text)
         val loc = if (isVietnamese) Locale("vi", "VN") else Locale.US
         val result = tts?.setLanguage(loc)
         if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
@@ -697,8 +697,12 @@ class MainActivity : ComponentActivity() {
             speakOut(warningText)
             return
         }
-
         val q = query.lowercase(Locale.ROOT)
+        
+        // Auto-detect query language for dynamic response
+        val isQueryVietnamese = Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(query)
+        val isQueryEnglish = Regex("\\b(turn|on|off|open|close|fold|unfold|door|mirror|ac|hvac|how|what|why|is|the|a|to|can|you)\\b", RegexOption.IGNORE_CASE).containsMatchIn(query)
+        val replyIsVietnamese = if (isQueryVietnamese) true else if (isQueryEnglish) false else appLanguage.value == AppLanguage.VIETNAMESE
         
         // --- LOCAL VHAL INTENT PARSING ---
         
@@ -707,8 +711,19 @@ class MainActivity : ComponentActivity() {
         if (q.contains("điều hòa") || q.contains("máy lạnh") || q.contains("ac") || q.contains("a/c") || q.contains("nhiệt độ") || tempMatch != null) {
             val turnOn = q.contains("bật") || q.contains("mở") || q.contains("turn on")
             val turnOff = q.contains("tắt") || q.contains("turn off")
+            val adjust = q.contains("tăng") || q.contains("giảm") || q.contains("turn up") || q.contains("turn down")
             
-            if (turnOn || turnOff || tempMatch != null) {
+            if (turnOn || turnOff || adjust || tempMatch != null) {
+                if (!turnOn && !turnOff && !isHvacOn.value) {
+                    val rejectReply = if (replyIsVietnamese) "Điều hòa đang tắt, không thể điều chỉnh nhiệt độ." else "AC is currently off, cannot adjust temperature."
+                    copilotAnswer.value = rejectReply
+                    citations.value = emptyList()
+                    assistantState.value = AssistantState.IDLE
+                    statusText.value = rejectReply
+                    speakOut(rejectReply, forceEnglish = !replyIsVietnamese)
+                    return
+                }
+                
                 if (turnOn) {
                     carPropertyHelper.setHvacState(0, true)
                     isHvacOn.value = true
@@ -717,13 +732,13 @@ class MainActivity : ComponentActivity() {
                     isHvacOn.value = false
                 }
                 
-                var reply = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đã " + (if (turnOn) "bật" else if (turnOff) "tắt" else "điều chỉnh") + " điều hòa" else "HVAC " + (if (turnOn) "turned on" else if (turnOff) "turned off" else "adjusted")
+                var reply = if (replyIsVietnamese) "Đã " + (if (turnOn) "bật" else if (turnOff) "tắt" else "điều chỉnh") + " điều hòa" else "HVAC " + (if (turnOn) "turned on" else if (turnOff) "turned off" else "adjusted")
                 
                 if (tempMatch != null) {
                     val tempValue = tempMatch.groupValues[1].toFloatOrNull()
                     if (tempValue != null) {
                         carPropertyHelper.setHvacTemperature(0, tempValue)
-                        reply += if (appLanguage.value == AppLanguage.VIETNAMESE) " ở mức $tempValue độ." else " to $tempValue degrees."
+                        reply += if (replyIsVietnamese) " ở mức $tempValue độ." else " to $tempValue degrees."
                     }
                 } else {
                     reply += "."
@@ -733,7 +748,7 @@ class MainActivity : ComponentActivity() {
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
-                speakOut(reply)
+                speakOut(reply, forceEnglish = !replyIsVietnamese)
                 return
             }
         }
@@ -745,7 +760,7 @@ class MainActivity : ComponentActivity() {
             
             if (unlock || lock) {
                 carPropertyHelper.setDoorLock(0, lock)
-                val reply = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                val reply = if (replyIsVietnamese) {
                     if (unlock) "Đã mở khóa cửa xe." else "Đã khóa cửa xe an toàn."
                 } else {
                     if (unlock) "Doors unlocked." else "Doors locked securely."
@@ -754,7 +769,7 @@ class MainActivity : ComponentActivity() {
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
-                speakOut(reply)
+                speakOut(reply, forceEnglish = !replyIsVietnamese)
                 return
             }
         }
@@ -766,7 +781,7 @@ class MainActivity : ComponentActivity() {
             
             if (unfold || fold) {
                 carPropertyHelper.setMirrorFold(0, fold)
-                val reply = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                val reply = if (replyIsVietnamese) {
                     if (unfold) "Đã mở gương chiếu hậu." else "Đã gập gương chiếu hậu."
                 } else {
                     if (unfold) "Mirrors unfolded." else "Mirrors folded."
@@ -775,7 +790,7 @@ class MainActivity : ComponentActivity() {
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
-                speakOut(reply)
+                speakOut(reply, forceEnglish = !replyIsVietnamese)
                 return
             }
         }
@@ -791,7 +806,7 @@ class MainActivity : ComponentActivity() {
         CoroutineScope(Dispatchers.IO).launch {
             val started = SystemClock.elapsedRealtime()
             try {
-                val langCode = if (appLanguage.value == AppLanguage.VIETNAMESE) "vi" else "en"
+                val langCode = if (replyIsVietnamese) "vi" else "en"
                 val response = copilotRepository.sendQuery(query, language = langCode)
                 val elapsed = SystemClock.elapsedRealtime() - started
                 runOnUiThread {
@@ -803,7 +818,7 @@ class MainActivity : ComponentActivity() {
                     if (response.audio_base64 != null) {
                         playBase64Audio(response.audio_base64, response.answer)
                     } else {
-                        speakOut(response.answer)
+                        speakOut(response.answer, forceEnglish = !replyIsVietnamese)
                     }
                 }
             } catch (e: Exception) {
