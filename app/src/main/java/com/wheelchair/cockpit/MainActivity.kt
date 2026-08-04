@@ -155,6 +155,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val speed by carPropertyHelper.speedFlow.collectAsState()
             val hvacOn by carPropertyHelper.hvacOnFlow.collectAsState()
+            val hvacTemp by carPropertyHelper.hvacTempFlow.collectAsState()
             val drivingRestricted by carPropertyHelper.uxRestrictionsFlow.collectAsState()
             val activeWarning by safetyWarning
             // --- START MODIFICATION ---
@@ -175,6 +176,7 @@ class MainActivity : ComponentActivity() {
                     citations = citations.value,
                     vehicleSpeed = speed,
                     isHvacOn = hvacOn,
+                    hvacTemp = hvacTemp,
                     rmsLevel = rmsLevel.floatValue,
                     appLanguage = appLanguage.value,
                     displayTheme = displayTheme.value,
@@ -352,7 +354,7 @@ class MainActivity : ComponentActivity() {
             assistantState.value = AssistantState.SPEAKING
             
             val audioBytes = android.util.Base64.decode(base64Audio, android.util.Base64.DEFAULT)
-            val tempFile = java.io.File(cacheDir, "response_audio.mp3")
+            val tempFile = java.io.File(cacheDir, "response_audio.wav")
             java.io.FileOutputStream(tempFile).use { it.write(audioBytes) }
             
             backendMediaPlayer?.release()
@@ -378,8 +380,9 @@ class MainActivity : ComponentActivity() {
         stopVoskListening()
         assistantState.value = AssistantState.SPEAKING
         
-        // Dynamically update TTS language based on current setting
-        val loc = if (appLanguage.value == AppLanguage.VIETNAMESE) Locale("vi", "VN") else Locale.US
+        // Auto-detect language based on text content (Vietnamese diacritics)
+        val isVietnamese = Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        val loc = if (isVietnamese) Locale("vi", "VN") else Locale.US
         val result = tts?.setLanguage(loc)
         if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
             tts?.setLanguage(Locale.US)
@@ -387,7 +390,7 @@ class MainActivity : ComponentActivity() {
 
         // Hackathon trick: Phonetic replacement for basic AOSP TTS
         var speakText = text
-        if (appLanguage.value == AppLanguage.VIETNAMESE) {
+        if (isVietnamese) {
             speakText = speakText
                 .replace(Regex("\\bAC\\b"), "Ây Xi")
                 .replace(Regex("\\bHVAC\\b"), "Hát Vát")
@@ -695,6 +698,88 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        val q = query.lowercase(Locale.ROOT)
+        
+        // --- LOCAL VHAL INTENT PARSING ---
+        
+        // 1. HVAC Control
+        val tempMatch = Regex("(\\d+)\\s*(độ|degrees|degree|c)").find(q)
+        if (q.contains("điều hòa") || q.contains("máy lạnh") || q.contains("ac") || q.contains("a/c") || q.contains("nhiệt độ") || tempMatch != null) {
+            val turnOn = q.contains("bật") || q.contains("mở") || q.contains("turn on")
+            val turnOff = q.contains("tắt") || q.contains("turn off")
+            
+            if (turnOn || turnOff || tempMatch != null) {
+                if (turnOn) {
+                    carPropertyHelper.setHvacState(0, true)
+                    isHvacOn.value = true
+                } else if (turnOff) {
+                    carPropertyHelper.setHvacState(0, false)
+                    isHvacOn.value = false
+                }
+                
+                var reply = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đã " + (if (turnOn) "bật" else if (turnOff) "tắt" else "điều chỉnh") + " điều hòa" else "HVAC " + (if (turnOn) "turned on" else if (turnOff) "turned off" else "adjusted")
+                
+                if (tempMatch != null) {
+                    val tempValue = tempMatch.groupValues[1].toFloatOrNull()
+                    if (tempValue != null) {
+                        carPropertyHelper.setHvacTemperature(0, tempValue)
+                        reply += if (appLanguage.value == AppLanguage.VIETNAMESE) " ở mức $tempValue độ." else " to $tempValue degrees."
+                    }
+                } else {
+                    reply += "."
+                }
+                
+                copilotAnswer.value = reply
+                citations.value = emptyList()
+                assistantState.value = AssistantState.IDLE
+                statusText.value = reply
+                speakOut(reply)
+                return
+            }
+        }
+        
+        // 2. Door Control
+        if (q.contains("cửa") || q.contains("door")) {
+            val unlock = q.contains("mở") || q.contains("unlock") || q.contains("open")
+            val lock = q.contains("khóa") || q.contains("đóng") || q.contains("lock") || q.contains("close")
+            
+            if (unlock || lock) {
+                carPropertyHelper.setDoorLock(0, lock)
+                val reply = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                    if (unlock) "Đã mở khóa cửa xe." else "Đã khóa cửa xe an toàn."
+                } else {
+                    if (unlock) "Doors unlocked." else "Doors locked securely."
+                }
+                copilotAnswer.value = reply
+                citations.value = emptyList()
+                assistantState.value = AssistantState.IDLE
+                statusText.value = reply
+                speakOut(reply)
+                return
+            }
+        }
+        
+        // 3. Mirror Control
+        if (q.contains("gương") || q.contains("mirror")) {
+            val unfold = q.contains("mở") || q.contains("unfold") || q.contains("open")
+            val fold = q.contains("gập") || q.contains("đóng") || q.contains("fold") || q.contains("close")
+            
+            if (unfold || fold) {
+                carPropertyHelper.setMirrorFold(0, fold)
+                val reply = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                    if (unfold) "Đã mở gương chiếu hậu." else "Đã gập gương chiếu hậu."
+                } else {
+                    if (unfold) "Mirrors unfolded." else "Mirrors folded."
+                }
+                copilotAnswer.value = reply
+                citations.value = emptyList()
+                assistantState.value = AssistantState.IDLE
+                statusText.value = reply
+                speakOut(reply)
+                return
+            }
+        }
+
         assistantState.value = AssistantState.PROCESSING
         statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đang hỏi Copilot: \"$query\"" else "Asking Copilot: \"$query\""
         copilotAnswer.value = ""
@@ -795,6 +880,7 @@ fun CockpitAppScreen(
     citations: List<CitationInfo>,
     vehicleSpeed: Float,
     isHvacOn: Boolean,
+    hvacTemp: Float,
     rmsLevel: Float,
     appLanguage: AppLanguage,
     displayTheme: DisplayTheme,
@@ -869,6 +955,7 @@ fun CockpitAppScreen(
             AutomotiveTopBar(
                 vehicleSpeed = vehicleSpeed,
                 isHvacOn = isHvacOn,
+                hvacTemp = hvacTemp,
                 primaryBlue = primaryBlue,
                 backgroundBg = backgroundBg,
                 surfaceContainer = surfaceContainer,

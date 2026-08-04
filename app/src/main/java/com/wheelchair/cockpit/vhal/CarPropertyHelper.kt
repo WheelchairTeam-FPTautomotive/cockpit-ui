@@ -32,6 +32,12 @@ class CarPropertyHelper(
     private val _hvacOnFlow = MutableStateFlow(false)
     val hvacOnFlow: StateFlow<Boolean> = _hvacOnFlow.asStateFlow()
 
+    private val _hvacTempFlow = MutableStateFlow(24.0f)
+    val hvacTempFlow: StateFlow<Float> = _hvacTempFlow.asStateFlow()
+
+    // Debounce: ignore VHAL callbacks for 2s after a write to prevent emulator stale-value overwrite
+    private var hvacWritePendingUntil: Long = 0L
+
     private val _uxRestrictionsFlow = MutableStateFlow(false)
     val uxRestrictionsFlow: StateFlow<Boolean> = _uxRestrictionsFlow.asStateFlow()
 
@@ -53,7 +59,12 @@ class CarPropertyHelper(
                 }
                 VehiclePropertyIds.HVAC_AC_ON -> {
                     if (value.value is Boolean) {
-                        _hvacOnFlow.value = value.value as Boolean
+                        // Skip stale callbacks for 2s after a user-initiated write
+                        if (System.currentTimeMillis() > hvacWritePendingUntil) {
+                            _hvacOnFlow.value = value.value as Boolean
+                        } else {
+                            Log.d("CarPropertyHelper", "Ignored stale HVAC_AC_ON callback during pending write")
+                        }
                     }
                 }
             }
@@ -170,12 +181,80 @@ class CarPropertyHelper(
 
     fun setHvacState(areaId: Int, turnOn: Boolean) {
         val manager = carPropertyManager ?: return
-        try {
-            manager.setBooleanProperty(VehiclePropertyIds.HVAC_AC_ON, areaId, turnOn)
-            _hvacOnFlow.value = turnOn
-            Log.i("CarPropertyHelper", "Set HVAC HVAC_AC_ON AreaId=$areaId State=$turnOn")
-        } catch (e: Exception) {
-            Log.e("CarPropertyHelper", "Failed to write HVAC property: ${e.message}")
+        val areasToUpdate = if (areaId == 0) listOf(1, 4, 16, 64, 5, 85) else listOf(areaId)
+
+        var anySuccess = false
+        for (area in areasToUpdate) {
+            // Set POWER_ON first (required by spec before AC_ON can accept writes)
+            try {
+                manager.setBooleanProperty(VehiclePropertyIds.HVAC_POWER_ON, area, turnOn)
+                Log.i("CarPropertyHelper", "Set HVAC_POWER_ON AreaId=$area State=$turnOn")
+            } catch (e: Exception) {
+                Log.w("CarPropertyHelper", "HVAC_POWER_ON AreaId=$area failed (may be read-only on emulator): ${e.message}")
+            }
+            // Set AC_ON independently — emulator may accept this even if POWER_ON failed
+            try {
+                manager.setBooleanProperty(VehiclePropertyIds.HVAC_AC_ON, area, turnOn)
+                Log.i("CarPropertyHelper", "Set HVAC_AC_ON AreaId=$area State=$turnOn")
+                anySuccess = true
+            } catch (e: Exception) {
+                Log.w("CarPropertyHelper", "HVAC_AC_ON AreaId=$area failed: ${e.message}")
+            }
+        }
+
+        if (!anySuccess) {
+            Log.e("CarPropertyHelper", "Failed to set HVAC_AC_ON for all areas — updating UI only")
+        }
+        // Set debounce window so callback doesn't overwrite our intended state
+        hvacWritePendingUntil = System.currentTimeMillis() + 2000L
+        _hvacOnFlow.value = turnOn // Always update UI
+    }
+
+    fun setHvacTemperature(areaId: Int, temperature: Float) {
+        val manager = carPropertyManager ?: return
+        val areasToUpdate = if (areaId == 0) listOf(1, 4, 16, 64, 5, 85) else listOf(areaId)
+
+        var anySuccess = false
+        for (area in areasToUpdate) {
+            try {
+                manager.setFloatProperty(VehiclePropertyIds.HVAC_TEMPERATURE_SET, area, temperature)
+                Log.i("CarPropertyHelper", "Set HVAC_TEMPERATURE_SET AreaId=$area Temp=$temperature")
+                anySuccess = true
+            } catch (e: Exception) {
+                Log.w("CarPropertyHelper", "HVAC_TEMPERATURE_SET AreaId=$area failed: ${e.message}")
+            }
+        }
+
+        if (!anySuccess) {
+            Log.e("CarPropertyHelper", "Failed to set HVAC_TEMPERATURE_SET for all areas — updating UI only")
+        }
+        _hvacTempFlow.value = temperature // Always update UI
+    }
+
+    fun setDoorLock(areaId: Int, lock: Boolean) {
+        val manager = carPropertyManager ?: return
+        val areasToUpdate = if (areaId == 0) listOf(1, 4, 16, 64) else listOf(areaId) // 1: Row1L, 4: Row1R, 16: Row2L, 64: Row2R
+        for (area in areasToUpdate) {
+            try {
+                manager.setBooleanProperty(VehiclePropertyIds.DOOR_LOCK, area, lock)
+                Log.i("CarPropertyHelper", "Set DOOR_LOCK AreaId=$area Lock=$lock")
+            } catch (e: Exception) {
+                Log.e("CarPropertyHelper", "Failed to write DOOR_LOCK for AreaId=$area: ${e.message}")
+            }
+        }
+    }
+
+    fun setMirrorFold(areaId: Int, fold: Boolean) {
+        val manager = carPropertyManager ?: return
+        // 1 = ROW_1_LEFT, 4 = ROW_1_RIGHT
+        val areasToUpdate = if (areaId == 0) listOf(1, 4) else listOf(areaId)
+        for (area in areasToUpdate) {
+            try {
+                manager.setBooleanProperty(VehiclePropertyIds.MIRROR_FOLD, area, fold)
+                Log.i("CarPropertyHelper", "Set MIRROR_FOLD AreaId=$area Fold=$fold")
+            } catch (e: Exception) {
+                Log.e("CarPropertyHelper", "Failed to write MIRROR_FOLD for AreaId=$area: ${e.message}")
+            }
         }
     }
 

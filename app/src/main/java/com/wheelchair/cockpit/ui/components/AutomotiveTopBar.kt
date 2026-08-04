@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 fun AutomotiveTopBar(
     vehicleSpeed: Float,
     isHvacOn: Boolean,
+    hvacTemp: Float,
     primaryBlue: Color,
     backgroundBg: Color,
     surfaceContainer: Color,
@@ -116,7 +117,7 @@ fun AutomotiveTopBar(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = if (isHvacOn) "AC ON" else "AC OFF",
+                                text = if (isHvacOn) "AC ${hvacTemp}°" else "AC OFF",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isDrivingRestricted) textMain.copy(alpha = 0.5f) else textMain
