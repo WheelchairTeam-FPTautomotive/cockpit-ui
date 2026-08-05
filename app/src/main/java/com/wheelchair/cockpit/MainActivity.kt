@@ -17,6 +17,9 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -67,7 +70,7 @@ class MainActivity : ComponentActivity() {
     private var assistantState = mutableStateOf(AssistantState.IDLE)
     private var statusText = mutableStateOf("System Standby. Say \"Hey Car\" to activate.")
     private var rmsLevel = mutableFloatStateOf(0f)
-    private var copilotAnswer = mutableStateOf("")
+    private var chatHistory = androidx.compose.runtime.mutableStateListOf<com.wheelchair.cockpit.ui.components.ChatMessage>()
     private var citations = mutableStateOf<List<CitationInfo>>(emptyList())
     private var vehicleSpeed = mutableFloatStateOf(0.0f)
     private var isHvacOn = mutableStateOf(false)
@@ -172,7 +175,7 @@ class MainActivity : ComponentActivity() {
                 CockpitAppScreen(
                     assistantState = assistantState.value,
                     statusText = statusText.value,
-                    copilotAnswer = copilotAnswer.value,
+                    chatHistory = chatHistory,
                     citations = citations.value,
                     vehicleSpeed = speed,
                     isHvacOn = hvacOn,
@@ -276,6 +279,12 @@ class MainActivity : ComponentActivity() {
         if (checkSelfPermission("android.car.permission.CAR_SPEED") != PackageManager.PERMISSION_GRANTED) {
             permissionsToRequest.add("android.car.permission.CAR_SPEED")
         }
+        if (checkSelfPermission("android.car.permission.CONTROL_CAR_CLIMATE") != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add("android.car.permission.CONTROL_CAR_CLIMATE")
+        }
+        if (checkSelfPermission("android.car.permission.CONTROL_CAR_DOORS") != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add("android.car.permission.CONTROL_CAR_DOORS")
+        }
 
         if (permissionsToRequest.isNotEmpty()) {
             // MODIFIED: surface mic denial until grant completes
@@ -353,6 +362,11 @@ class MainActivity : ComponentActivity() {
             tts?.stop()
             assistantState.value = AssistantState.SPEAKING
             
+            if (base64Audio.isEmpty()) {
+                speakOut(fallbackText, localOnly = true)
+                return
+            }
+            
             val audioBytes = android.util.Base64.decode(base64Audio, android.util.Base64.DEFAULT)
             val tempFile = java.io.File(cacheDir, "response_audio.wav")
             java.io.FileOutputStream(tempFile).use { it.write(audioBytes) }
@@ -361,55 +375,86 @@ class MainActivity : ComponentActivity() {
             backendMediaPlayer = android.media.MediaPlayer().apply {
                 setDataSource(tempFile.absolutePath)
                 prepare()
-                start()
                 setOnCompletionListener {
                     runOnUiThread {
                         assistantState.value = AssistantState.IDLE
+                        statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                            "Trạng thái chờ. Nói \"Hey Car\" để kích hoạt."
+                        } else {
+                            "System Standby. Say \"Hey Car\" to activate."
+                        }
                         startVoskListening()
                     }
                 }
+                start()
             }
         } catch (e: Exception) {
             Log.e("CockpitUI", "Error playing base64 audio", e)
-            speakOut(fallbackText) // Fallback to local TTS
+            speakOut(fallbackText, localOnly = true) // Fallback to local TTS
         }
     }
 
-    private fun speakOut(text: String, forceEnglish: Boolean = false) {
+    private fun speakOut(text: String, forceEnglish: Boolean = false, localOnly: Boolean = false) {
         stopGoogleListening()
         stopVoskListening()
         assistantState.value = AssistantState.SPEAKING
         
         // Auto-detect language based on text content (Vietnamese diacritics)
         val isVietnamese = if (forceEnglish) false else Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(text)
-        val loc = if (isVietnamese) Locale("vi", "VN") else Locale.US
-        val result = tts?.setLanguage(loc)
-        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-            tts?.setLanguage(Locale.US)
+        val langStr = if (isVietnamese) "vi" else "en"
+
+        // Fire request to the remote Edge-TTS service in the background
+        if (!localOnly) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val response = com.wheelchair.cockpit.api.CopilotClient.service.generateTts(
+                        com.wheelchair.cockpit.api.TtsRequest(text = text, language = langStr)
+                    )
+                    if (!response.audio_base64.isNullOrEmpty()) {
+                        runOnUiThread { playBase64Audio(response.audio_base64, text) }
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    Log.e("CockpitUI", "Remote TTS failed: ${e.message}")
+                }
+                // Fallback to local TTS if remote fails or returns empty audio
+                runOnUiThread { speakOut(text, forceEnglish, localOnly = true) }
+            }
+            return
         }
 
-        // Hackathon trick: Phonetic replacement for basic AOSP TTS
-        var speakText = text
-        if (isVietnamese) {
-            speakText = speakText
-                .replace(Regex("\\bAC\\b"), "Ây Xi")
-                .replace(Regex("\\bHVAC\\b"), "Hát Vát")
-                .replace(Regex("\\bADAS\\b"), "Ây Đát")
-                .replace(Regex("\\bGPS\\b"), "Gờ Pê Ét")
-                .replace(Regex("\\bCopilot\\b", RegexOption.IGNORE_CASE), "Cô Pai Lọt")
-                .replace(Regex("\\bBluetooth\\b", RegexOption.IGNORE_CASE), "Bờ Lu Tút")
-        } else {
-            // English TTS reading Vietnamese words
-            speakText = speakText
-                .replace(Regex("\\bHà Nội\\b", RegexOption.IGNORE_CASE), "Ha-Noy")
-                .replace(Regex("\\bViệt Nam\\b", RegexOption.IGNORE_CASE), "Vee-etnahm")
-                .replace(Regex("\\bHồ Chí Minh\\b", RegexOption.IGNORE_CASE), "Ho Chee Min")
-                .replace(Regex("\\bđiều hòa\\b", RegexOption.IGNORE_CASE), "deew hwa")
-        }
+        // Fallback to local TTS (only reached if localOnly is true)
+        if (localOnly) {
+            runOnUiThread {
+                val loc = if (isVietnamese) Locale("vi", "VN") else Locale.US
+                val result = tts?.setLanguage(loc)
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    tts?.setLanguage(Locale.US)
+                }
 
-        val params = Bundle()
-        params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "CockpitTTS")
-        tts?.speak(speakText, TextToSpeech.QUEUE_FLUSH, params, "CockpitTTS")
+                // Hackathon trick: Phonetic replacement for basic AOSP TTS
+                var speakText = text
+                if (isVietnamese) {
+                    speakText = speakText
+                        .replace(Regex("\\bAC\\b"), "Ây Xi")
+                        .replace(Regex("\\bHVAC\\b"), "Hát Vát")
+                        .replace(Regex("\\bADAS\\b"), "Ây Đát")
+                        .replace(Regex("\\bGPS\\b"), "Gờ Pê Ét")
+                        .replace(Regex("\\bCopilot\\b", RegexOption.IGNORE_CASE), "Cô Pai Lọt")
+                        .replace(Regex("\\bBluetooth\\b", RegexOption.IGNORE_CASE), "Bờ Lu Tút")
+                } else {
+                    speakText = speakText
+                        .replace(Regex("\\bHà Nội\\b", RegexOption.IGNORE_CASE), "Ha-Noy")
+                        .replace(Regex("\\bViệt Nam\\b", RegexOption.IGNORE_CASE), "Vee-etnahm")
+                        .replace(Regex("\\bHồ Chí Minh\\b", RegexOption.IGNORE_CASE), "Ho Chee Min")
+                        .replace(Regex("\\bđiều hòa\\b", RegexOption.IGNORE_CASE), "deew hwa")
+                }
+
+                val params = Bundle()
+                params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "CockpitTTS")
+                tts?.speak(speakText, TextToSpeech.QUEUE_FLUSH, params, "CockpitTTS")
+            }
+        }
     }
 
     private var voskModel: org.vosk.Model? = null
@@ -422,12 +467,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            micDiagStatus.value = MicDiag.STT_UNAVAILABLE
-            statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
-                "STT không khả dụng trên thiết bị này."
-            } else {
-                "Speech recognition is unavailable on this device."
-            }
+            Log.w("CockpitUI", "Local SpeechRecognizer not available. Falling back to backend STT.")
             // Still unpack Vosk for wake-word if possible
         } else {
             micDiagStatus.value = MicDiag.OK
@@ -568,31 +608,153 @@ class MainActivity : ComponentActivity() {
                lower.matches(Regex(".*\\bok\\b.*"))
     }
 
+    private var customAudioRecord: android.media.AudioRecord? = null
+    private var isCustomRecording = false
+
+    private fun addWavHeader(pcmData: ByteArray, sampleRate: Int): ByteArray {
+        val totalDataLen = pcmData.size + 36
+        val byteRate = sampleRate * 2
+        val header = ByteArray(44)
+        header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
+        header[4] = (totalDataLen and 0xff).toByte(); header[5] = ((totalDataLen shr 8) and 0xff).toByte(); header[6] = ((totalDataLen shr 16) and 0xff).toByte(); header[7] = ((totalDataLen shr 24) and 0xff).toByte()
+        header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
+        header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
+        header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0
+        header[20] = 1; header[21] = 0; header[22] = 1; header[23] = 0
+        header[24] = (sampleRate and 0xff).toByte(); header[25] = ((sampleRate shr 8) and 0xff).toByte(); header[26] = ((sampleRate shr 16) and 0xff).toByte(); header[27] = ((sampleRate shr 24) and 0xff).toByte()
+        header[28] = (byteRate and 0xff).toByte(); header[29] = ((byteRate shr 8) and 0xff).toByte(); header[30] = ((byteRate shr 16) and 0xff).toByte(); header[31] = ((byteRate shr 24) and 0xff).toByte()
+        header[32] = 2; header[33] = 0; header[34] = 16; header[35] = 0
+        header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
+        header[40] = (pcmData.size and 0xff).toByte(); header[41] = ((pcmData.size shr 8) and 0xff).toByte(); header[42] = ((pcmData.size shr 16) and 0xff).toByte(); header[43] = ((pcmData.size shr 24) and 0xff).toByte()
+        val out = java.io.ByteArrayOutputStream()
+        out.write(header)
+        out.write(pcmData)
+        return out.toByteArray()
+    }
+
     private fun startGoogleListening() {
         if (assistantState.value == AssistantState.SPEAKING) return
         maxRmsInSession = 0f
+        isCustomRecording = true
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            val listenLang = if (appLanguage.value == AppLanguage.VIETNAMESE) "vi-VN" else "en-US"
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, listenLang)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        Thread {
+            try {
+                val sampleRate = 16000
+                val minBufferSize = android.media.AudioRecord.getMinBufferSize(sampleRate, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT)
+                if (androidx.core.app.ActivityCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) return@Thread
+                
+                customAudioRecord = android.media.AudioRecord(android.media.MediaRecorder.AudioSource.MIC, sampleRate, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, minBufferSize * 2)
+                
+                val pcmData = java.io.ByteArrayOutputStream()
+                customAudioRecord?.startRecording()
+                
+                val buffer = ByteArray(minBufferSize)
+                val endTime = System.currentTimeMillis() + 4000 // record for 4 seconds
+                
+                while (isCustomRecording && System.currentTimeMillis() < endTime) {
+                    val read = customAudioRecord?.read(buffer, 0, buffer.size) ?: 0
+                    if (read > 0) {
+                        pcmData.write(buffer, 0, read)
+                        var sum = 0.0
+                        for (i in 0 until read step 2) {
+                            val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
+                            sum += sample * sample
+                        }
+                        val rms = Math.sqrt(sum / (read / 2)).toFloat()
+                        val rmsdB = if (rms > 0) 20 * kotlin.math.log10(rms.toDouble()).toFloat() else -80f
+                        val normalized = ((rmsdB - 30f) / 50f).coerceIn(0f, 1f)
+                        runOnUiThread { rmsLevel.floatValue = normalized }
+                    }
+                }
+                
+                customAudioRecord?.stop()
+                customAudioRecord?.release()
+                customAudioRecord = null
+                
+                runOnUiThread {
+                    rmsLevel.floatValue = 0f
+                    statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đang gửi âm thanh xử lý..." else "Processing audio..."
+                }
+                
+                val wavBytes = addWavHeader(pcmData.toByteArray(), sampleRate)
+                
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    try {
+                        val requestBody = okhttp3.RequestBody.create("audio/wav".toMediaType(), wavBytes)
+                        val part = okhttp3.MultipartBody.Part.createFormData("file", "audio.wav", requestBody)
+                        val lang = if (appLanguage.value == AppLanguage.VIETNAMESE) "vi" else "en"
+                        
+                        // 1. Get STT instantly and show on UI
+                        val sttResponse = com.wheelchair.cockpit.api.CopilotClient.service.sttOnly(part)
+                        val transcript = sttResponse.transcript
+                        
+                        withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            partialPublisher.clear()
+                            partialTranscript.value = transcript
+                            statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đang suy nghĩ..." else "Thinking..."
+                        }
+                        
+                        // 2. Local Intent parsing (re-using existing processUserSpeech)
+                        withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            processUserSpeech(transcript)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("CockpitUI", "Backend voice upload failed", e)
+                        withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            assistantState.value = AssistantState.IDLE
+                            statusText.value = "Lỗi xử lý âm thanh. Đã về Standby."
+                            startVoskListening()
+                        }
+                    }
+                }
+                
+            } catch(e: Exception) {
+                Log.e("CockpitUI", "Recording failed", e)
+                runOnUiThread { 
+                    assistantState.value = AssistantState.IDLE 
+                    startVoskListening()
+                }
+            }
+        }.start()
+    }
+
+    private fun handleVoiceQueryResponse(response: com.wheelchair.cockpit.api.VoiceQueryResponse) {
+        val currentSpeed = carPropertyHelper.speedFlow.value
+        val query = response.transcript.lowercase(java.util.Locale.ROOT)
+        val isFoldAction = query.contains("gập") || query.contains("đóng") || query.contains("thu") || query.contains("cất") || query.contains("fold") || query.contains("close") || query.contains("retract")
+        val isMirrorTarget = query.contains("gương") || query.contains("mirror")
+        val isMirrorFoldingRequest = isFoldAction && isMirrorTarget
+        
+        if (isMirrorFoldingRequest && currentSpeed > 0f) {
+            val warningText = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                "Yêu cầu bị từ chối: Không thể gập gương khi xe đang di chuyển. Vui lòng dừng xe an toàn!"
+            } else {
+                "Request denied: Cannot fold mirrors while the vehicle is in motion. Please stop safely first!"
+            }
+            chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = warningText))
+            citations.value = emptyList()
+            assistantState.value = AssistantState.IDLE
+            statusText.value = warningText
+            safetyWarning.value = warningText
+            mainHandler.postDelayed({ if (safetyWarning.value == warningText) safetyWarning.value = null }, 5000)
+            speakOut(warningText)
+            return
         }
-        try {
-            speechRecognizer?.startListening(intent)
-        } catch (e: Exception) {
-            Log.e("CockpitUI", "Start listening error", e)
+
+        chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = response.answer, citations = response.citations))
+        citations.value = response.citations
+        statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đã nhận câu trả lời." else "Response received."
+        
+        if (!response.audio_base64.isNullOrEmpty()) {
+            playBase64Audio(response.audio_base64, response.answer)
+        } else {
+            speakOut(response.answer)
         }
     }
 
     private fun stopGoogleListening() {
+        isCustomRecording = false
         autoSleepRunnable?.let { mainHandler.removeCallbacks(it) }
-        try {
-            speechRecognizer?.stopListening()
-        } catch (e: Exception) {
-            Log.e("CockpitUI", "Stop listening error", e)
-        }
     }
 
     private fun triggerKeywordWake() {
@@ -617,7 +779,6 @@ class MainActivity : ComponentActivity() {
             } else {
                 "I'm listening. Please speak now..."
             }
-            copilotAnswer.value = ""
             citations.value = emptyList()
             resetAutoSleepTimer()
             
@@ -661,6 +822,10 @@ class MainActivity : ComponentActivity() {
     private fun processUserSpeech(query: String) {
         autoSleepRunnable?.let { mainHandler.removeCallbacks(it) }
         
+        if (query.isNotBlank()) {
+            chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = true, text = query))
+        }
+
         // VHAL Speed-sensitive Safety Gate for Mirror Folding
         val currentSpeed = carPropertyHelper.speedFlow.value
         val isFoldAction = query.contains("gập", ignoreCase = true) || 
@@ -681,7 +846,7 @@ class MainActivity : ComponentActivity() {
                 "Request denied: Cannot fold mirrors while the vehicle is in motion. Please stop safely first!"
             }
             
-            copilotAnswer.value = warningText
+            chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = warningText))
             citations.value = emptyList()
             assistantState.value = AssistantState.IDLE
             statusText.value = warningText
@@ -701,14 +866,14 @@ class MainActivity : ComponentActivity() {
         
         // Auto-detect query language for dynamic response
         val isQueryVietnamese = Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(query)
-        val isQueryEnglish = Regex("\\b(turn|on|off|open|close|fold|unfold|door|mirror|ac|hvac|how|what|why|is|the|a|to|can|you)\\b", RegexOption.IGNORE_CASE).containsMatchIn(query)
+        val isQueryEnglish = Regex("\\b(turn|on|off|open|close|fold|unfold|door|mirror|ac|hvac|air|condition|how|what|why|is|the|a|to|can|you)\\b", RegexOption.IGNORE_CASE).containsMatchIn(query)
         val replyIsVietnamese = if (isQueryVietnamese) true else if (isQueryEnglish) false else appLanguage.value == AppLanguage.VIETNAMESE
         
         // --- LOCAL VHAL INTENT PARSING ---
         
         // 1. HVAC Control
         val tempMatch = Regex("(\\d+)\\s*(độ|degrees|degree|c)").find(q)
-        if (q.contains("điều hòa") || q.contains("máy lạnh") || q.contains("ac") || q.contains("a/c") || q.contains("nhiệt độ") || tempMatch != null) {
+        if (q.contains("điều hòa") || q.contains("máy lạnh") || q.contains("ac") || q.contains("a/c") || q.contains("air condition") || q.contains("nhiệt độ") || tempMatch != null) {
             val turnOn = q.contains("bật") || q.contains("mở") || q.contains("turn on")
             val turnOff = q.contains("tắt") || q.contains("turn off")
             val adjust = q.contains("tăng") || q.contains("giảm") || q.contains("turn up") || q.contains("turn down")
@@ -716,7 +881,7 @@ class MainActivity : ComponentActivity() {
             if (turnOn || turnOff || adjust || tempMatch != null) {
                 if (!turnOn && !turnOff && !isHvacOn.value) {
                     val rejectReply = if (replyIsVietnamese) "Điều hòa đang tắt, không thể điều chỉnh nhiệt độ." else "AC is currently off, cannot adjust temperature."
-                    copilotAnswer.value = rejectReply
+                    chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = rejectReply))
                     citations.value = emptyList()
                     assistantState.value = AssistantState.IDLE
                     statusText.value = rejectReply
@@ -737,14 +902,17 @@ class MainActivity : ComponentActivity() {
                 if (tempMatch != null) {
                     val tempValue = tempMatch.groupValues[1].toFloatOrNull()
                     if (tempValue != null) {
-                        carPropertyHelper.setHvacTemperature(0, tempValue)
+                        // VHAL HVAC_TEMPERATURE_SET natively expects Celsius. 
+                        // If user says "62" (Fahrenheit), we auto-convert it to Celsius (~16.6C)
+                        val actualCelsius = if (tempValue > 40f) ((tempValue - 32f) * 5f / 9f) else tempValue
+                        carPropertyHelper.setHvacTemperature(0, actualCelsius)
                         reply += if (replyIsVietnamese) " ở mức $tempValue độ." else " to $tempValue degrees."
                     }
                 } else {
                     reply += "."
                 }
                 
-                copilotAnswer.value = reply
+                chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = reply))
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
@@ -765,7 +933,7 @@ class MainActivity : ComponentActivity() {
                 } else {
                     if (unlock) "Doors unlocked." else "Doors locked securely."
                 }
-                copilotAnswer.value = reply
+                chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = reply))
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
@@ -786,7 +954,7 @@ class MainActivity : ComponentActivity() {
                 } else {
                     if (unfold) "Mirrors unfolded." else "Mirrors folded."
                 }
-                copilotAnswer.value = reply
+                chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = reply))
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
@@ -797,7 +965,6 @@ class MainActivity : ComponentActivity() {
 
         assistantState.value = AssistantState.PROCESSING
         statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đang hỏi Copilot: \"$query\"" else "Asking Copilot: \"$query\""
-        copilotAnswer.value = ""
         citations.value = emptyList()
         partialPublisher.clear()
 
@@ -813,7 +980,7 @@ class MainActivity : ComponentActivity() {
                     if (devSettingsStore.current().developerModeEnabled) {
                         lastQueryLatencyMs.value = elapsed
                     }
-                    copilotAnswer.value = response.answer
+                    chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = response.answer, citations = response.citations))
                     citations.value = response.citations
                     if (response.audio_base64 != null) {
                         playBase64Audio(response.audio_base64, response.answer)
@@ -833,7 +1000,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                         "Gemini/Backend Error: ${e.localizedMessage}"
                     }
-                    copilotAnswer.value = fallback
+                    chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = fallback))
                     speakOut(fallback)
                 }
             }
@@ -858,6 +1025,15 @@ class MainActivity : ComponentActivity() {
         when (assistantState.value) {
             AssistantState.SPEAKING -> {
                 tts?.stop()
+                try {
+                    if (backendMediaPlayer?.isPlaying == true) {
+                        backendMediaPlayer?.stop()
+                    }
+                    backendMediaPlayer?.release()
+                    backendMediaPlayer = null
+                } catch (e: Exception) {
+                    Log.e("CockpitUI", "Error stopping backend player", e)
+                }
                 assistantState.value = AssistantState.IDLE
                 statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đã dừng trợ lý." else "Assistant stopped."
                 startVoskListening()
@@ -891,7 +1067,7 @@ class MainActivity : ComponentActivity() {
 fun CockpitAppScreen(
     assistantState: AssistantState,
     statusText: String,
-    copilotAnswer: String,
+    chatHistory: List<com.wheelchair.cockpit.ui.components.ChatMessage>,
     citations: List<CitationInfo>,
     vehicleSpeed: Float,
     isHvacOn: Boolean,
@@ -1053,8 +1229,7 @@ fun CockpitAppScreen(
 
                 // RIGHT PANEL: AI Copilot Results
                 CopilotResponsePanel(
-                    copilotAnswer = copilotAnswer,
-                    citations = citations,
+                    chatHistory = chatHistory,
                     assistantState = assistantState,
                     rmsLevel = rmsLevel,
                     appLanguage = appLanguage,

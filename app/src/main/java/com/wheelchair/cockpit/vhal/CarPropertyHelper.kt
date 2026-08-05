@@ -40,6 +40,15 @@ class CarPropertyHelper(
 
     private val _uxRestrictionsFlow = MutableStateFlow(false)
     val uxRestrictionsFlow: StateFlow<Boolean> = _uxRestrictionsFlow.asStateFlow()
+    
+    private var isGearDrive = false
+    private var isSystemRestricted = false
+    
+    private fun evaluateRestrictions() {
+        val totalRestricted = isSystemRestricted || isGearDrive
+        _uxRestrictionsFlow.value = totalRestricted
+        onUxRestrictionsChanged(totalRestricted)
+    }
 
     private val vhalCallback = object : CarPropertyManager.CarPropertyEventCallback {
         override fun onChangeEvent(value: CarPropertyValue<*>) {
@@ -65,6 +74,21 @@ class CarPropertyHelper(
                         } else {
                             Log.d("CarPropertyHelper", "Ignored stale HVAC_AC_ON callback during pending write")
                         }
+                    }
+                }
+                VehiclePropertyIds.HVAC_TEMPERATURE_SET -> {
+                    if (value.value is Float) {
+                        if (System.currentTimeMillis() > hvacWritePendingUntil) {
+                            _hvacTempFlow.value = value.value as Float
+                        }
+                    }
+                }
+                VehiclePropertyIds.GEAR_SELECTION -> {
+                    if (value.value is Int) {
+                        val gear = value.value as Int
+                        // android.car.hardware.CarSensorEvent.GEAR_DRIVE = 8, GEAR_REVERSE = 2
+                        isGearDrive = (gear == 8 || gear == 2)
+                        evaluateRestrictions()
                     }
                 }
             }
@@ -107,17 +131,15 @@ class CarPropertyHelper(
     private fun registerUxListeners() {
         try {
             uxRestrictionsManager?.registerListener { restrictions ->
-                val isRestricted = restrictions.isRequiresDistractionOptimization || (restrictions.activeRestrictions != 0)
-                Log.i("CarPropertyHelper", "UX Restriction updated: isRestricted=$isRestricted")
-                _uxRestrictionsFlow.value = isRestricted
-                onUxRestrictionsChanged(isRestricted)
+                isSystemRestricted = restrictions.isRequiresDistractionOptimization || (restrictions.activeRestrictions != 0)
+                Log.i("CarPropertyHelper", "UX Restriction updated: system=$isSystemRestricted")
+                evaluateRestrictions()
             }
             val initial = uxRestrictionsManager?.getCurrentCarUxRestrictions()
             if (initial != null) {
-                val isRestricted = initial.isRequiresDistractionOptimization || (initial.activeRestrictions != 0)
-                Log.i("CarPropertyHelper", "Initial UX Restriction state: isRestricted=$isRestricted")
-                _uxRestrictionsFlow.value = isRestricted
-                onUxRestrictionsChanged(isRestricted)
+                isSystemRestricted = initial.isRequiresDistractionOptimization || (initial.activeRestrictions != 0)
+                Log.i("CarPropertyHelper", "Initial UX Restriction state: system=$isSystemRestricted")
+                evaluateRestrictions()
             }
         } catch (e: Exception) {
             Log.e("CarPropertyHelper", "Failed to register UX listener", e)
@@ -171,9 +193,41 @@ class CarPropertyHelper(
                 VehiclePropertyIds.HVAC_AC_ON,
                 CarPropertyManager.SENSOR_RATE_ONCHANGE
             )
-            Log.i("CarPropertyHelper", "Registered HVAC_AC_ON listener: $registeredHVAC")
+            manager.registerCallback(
+                vhalCallback,
+                VehiclePropertyIds.HVAC_TEMPERATURE_SET,
+                CarPropertyManager.SENSOR_RATE_ONCHANGE
+            )
+            Log.i("CarPropertyHelper", "Registered HVAC_AC_ON and HVAC_TEMPERATURE_SET listeners")
+            
+            // Read initial state for HVAC
+            val initialAc = manager.getProperty<Boolean>(VehiclePropertyIds.HVAC_AC_ON, 0)?.value
+            if (initialAc != null) {
+                _hvacOnFlow.value = initialAc
+                onSignalChanged(VehiclePropertyIds.HVAC_AC_ON, initialAc)
+            }
+            
+            val initialTemp = manager.getProperty<Float>(VehiclePropertyIds.HVAC_TEMPERATURE_SET, 0)?.value
+            if (initialTemp != null) {
+                _hvacTempFlow.value = initialTemp
+                onSignalChanged(VehiclePropertyIds.HVAC_TEMPERATURE_SET, initialTemp)
+            }
         } catch (e: Exception) {
-            Log.e("CarPropertyHelper", "Failed registering HVAC listener", e)
+            Log.e("CarPropertyHelper", "Failed registering HVAC listener or reading initial values", e)
+        }
+
+        // 3. Subscribe to Gear Selection
+        try {
+            manager.registerCallback(
+                vhalCallback,
+                VehiclePropertyIds.GEAR_SELECTION,
+                CarPropertyManager.SENSOR_RATE_ONCHANGE
+            )
+            val gear = manager.getProperty<Int>(VehiclePropertyIds.GEAR_SELECTION, 0)?.value ?: 0
+            isGearDrive = (gear == 8 || gear == 2)
+            evaluateRestrictions()
+        } catch (e: Exception) {
+            Log.w("CarPropertyHelper", "GEAR_SELECTION listener failed: ${e.message}")
         }
     }
 
@@ -181,7 +235,7 @@ class CarPropertyHelper(
 
     fun setHvacState(areaId: Int, turnOn: Boolean) {
         val manager = carPropertyManager ?: return
-        val areasToUpdate = if (areaId == 0) listOf(1, 4, 16, 64, 5, 85) else listOf(areaId)
+        val areasToUpdate = if (areaId == 0) listOf(0, 1, 4, 16, 64, 5, 85) else listOf(areaId)
 
         var anySuccess = false
         for (area in areasToUpdate) {
@@ -212,7 +266,7 @@ class CarPropertyHelper(
 
     fun setHvacTemperature(areaId: Int, temperature: Float) {
         val manager = carPropertyManager ?: return
-        val areasToUpdate = if (areaId == 0) listOf(1, 4, 16, 64, 5, 85) else listOf(areaId)
+        val areasToUpdate = if (areaId == 0) listOf(0, 1, 4, 16, 64, 5, 85) else listOf(areaId)
 
         var anySuccess = false
         for (area in areasToUpdate) {
@@ -233,7 +287,7 @@ class CarPropertyHelper(
 
     fun setDoorLock(areaId: Int, lock: Boolean) {
         val manager = carPropertyManager ?: return
-        val areasToUpdate = if (areaId == 0) listOf(1, 4, 16, 64) else listOf(areaId) // 1: Row1L, 4: Row1R, 16: Row2L, 64: Row2R
+        val areasToUpdate = if (areaId == 0) listOf(0, 1, 4, 16, 64) else listOf(areaId) // 0: Global, 1: Row1L, 4: Row1R, 16: Row2L, 64: Row2R
         for (area in areasToUpdate) {
             try {
                 manager.setBooleanProperty(VehiclePropertyIds.DOOR_LOCK, area, lock)
@@ -246,8 +300,8 @@ class CarPropertyHelper(
 
     fun setMirrorFold(areaId: Int, fold: Boolean) {
         val manager = carPropertyManager ?: return
-        // 1 = ROW_1_LEFT, 4 = ROW_1_RIGHT
-        val areasToUpdate = if (areaId == 0) listOf(1, 4) else listOf(areaId)
+        // 0 = Global, 1 = ROW_1_LEFT, 4 = ROW_1_RIGHT
+        val areasToUpdate = if (areaId == 0) listOf(0, 1, 4) else listOf(areaId)
         for (area in areasToUpdate) {
             try {
                 manager.setBooleanProperty(VehiclePropertyIds.MIRROR_FOLD, area, fold)

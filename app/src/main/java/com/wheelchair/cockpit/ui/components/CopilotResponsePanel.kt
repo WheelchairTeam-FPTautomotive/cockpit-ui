@@ -28,10 +28,15 @@ import com.wheelchair.cockpit.api.CitationInfo
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.AssistantState
 
+data class ChatMessage(
+    val isUser: Boolean,
+    val text: String,
+    val citations: List<CitationInfo> = emptyList()
+)
+
 @Composable
 fun CopilotResponsePanel(
-    copilotAnswer: String,
-    citations: List<CitationInfo>,
+    chatHistory: List<ChatMessage>,
     assistantState: AssistantState,
     rmsLevel: Float,
     appLanguage: AppLanguage,
@@ -120,68 +125,107 @@ fun CopilotResponsePanel(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                if (copilotAnswer.isNotEmpty()) {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        item {
-                            Text(
-                                text = parseMarkdownToAnnotatedString(copilotAnswer, textMain),
-                                fontSize = 15.sp,
-                                color = textMain,
-                                lineHeight = 21.sp
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                        }
-                        // --- START MODIFICATION ---
-                        // Bibliography / evidence cards: developer mode only
-                        if (showEvidence) {
-                            items(citations) { citation ->
-                                CitationCard(citation, primaryBlue, textMain, surfaceContainer, outlineVariant)
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                if (chatHistory.isNotEmpty() || partialTranscript.isNotEmpty() || assistantState != AssistantState.IDLE) {
+                    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+                    androidx.compose.runtime.LaunchedEffect(chatHistory.size, partialTranscript, assistantState) {
+                        listState.animateScrollToItem(kotlin.math.max(0, chatHistory.size * 2))
+                    }
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        contentPadding = PaddingValues(bottom = 16.dp)
+                    ) {
+                        items(chatHistory) { msg ->
+                            if (msg.isUser) {
+                                // User Bubble
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                    Surface(
+                                        color = primaryBlue,
+                                        shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp, topEnd = 16.dp, bottomEnd = 4.dp),
+                                        modifier = Modifier.widthIn(max = 280.dp)
+                                    ) {
+                                        Text(
+                                            text = msg.text,
+                                            color = Color.White,
+                                            fontSize = 15.sp,
+                                            modifier = Modifier.padding(12.dp)
+                                        )
+                                    }
+                                }
+                            } else {
+                                // AI Bubble
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                                    Surface(
+                                        color = surfaceContainer,
+                                        border = BorderStroke(1.dp, outlineVariant),
+                                        shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 4.dp, topEnd = 16.dp, bottomEnd = 16.dp),
+                                        modifier = Modifier.widthIn(max = 320.dp)
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp)) {
+                                            Text(
+                                                text = parseMarkdownToAnnotatedString(msg.text, primaryBlue),
+                                                color = textMain,
+                                                fontSize = 15.sp,
+                                                lineHeight = 21.sp
+                                            )
+                                            if (showEvidence && msg.citations.isNotEmpty()) {
+                                                Spacer(modifier = Modifier.height(10.dp))
+                                                msg.citations.forEach { citation ->
+                                                    CitationCard(citation, primaryBlue, textMain, surfaceContainerLow, outlineVariant)
+                                                    Spacer(modifier = Modifier.height(4.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
-                        // --- END MODIFICATION ---
+                        
+                        // Active listening/processing state
+                        if (assistantState != AssistantState.IDLE) {
+                            item {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                                    Surface(
+                                        color = surfaceContainer,
+                                        border = BorderStroke(1.dp, outlineVariant),
+                                        shape = RoundedCornerShape(16.dp),
+                                        modifier = Modifier.widthIn(max = 320.dp)
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                            StitchVoiceWaveform(
+                                                rmsLevel = rmsLevel,
+                                                primaryColor = primaryBlue,
+                                                modifier = Modifier.fillMaxWidth().height(40.dp)
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            val fallback = when (assistantState) {
+                                                AssistantState.PROCESSING -> if (vi) "Đang suy nghĩ..." else "Analyzing..."
+                                                else -> if (vi) "Đang lắng nghe..." else "Listening..."
+                                            }
+                                            val caption = partialTranscript.ifBlank { fallback }
+                                            Text(
+                                                text = caption,
+                                                fontSize = 14.sp,
+                                                fontStyle = FontStyle.Italic,
+                                                color = textSecondary.copy(alpha = 0.8f),
+                                                textAlign = TextAlign.Center
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        StitchVoiceWaveform(
-                            rmsLevel = rmsLevel,
-                            primaryColor = primaryBlue,
-                            modifier = Modifier.fillMaxWidth(0.6f).height(48.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // --- START MODIFICATION ---
-                        val fallback = when (assistantState) {
-                            AssistantState.PROCESSING -> if (vi) "Đang suy nghĩ..." else "Analyzing..."
-                            else -> if (vi) "Đang lắng nghe..." else "Listening..."
-                        }
-                        val caption = partialTranscript.ifBlank { fallback }
-                        val isPartial = partialTranscript.isNotBlank()
+                    // Empty state
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            text = caption,
-                            fontSize = if (isPartial) 15.sp else 14.sp,
-                            fontStyle = if (isPartial) FontStyle.Italic else FontStyle.Normal,
-                            fontWeight = if (isPartial) FontWeight.Medium else FontWeight.Normal,
-                            color = if (isPartial) {
-                                textSecondary.copy(alpha = if (isDrivingRestricted) 0.45f else 0.75f)
-                            } else {
-                                textSecondary
-                            },
-                            textAlign = TextAlign.Center,
-                            maxLines = if (isDrivingRestricted) 1 else 3,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 12.dp)
+                            text = if (vi) "Hãy nói 'Hey Car' để bắt đầu" else "Say 'Hey Car' to start",
+                            color = textSecondary.copy(alpha = 0.5f),
+                            fontSize = 15.sp
                         )
-                        if (micDiagLabel.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = micDiagLabel,
-                                fontSize = 11.sp,
-                                color = textSecondary.copy(alpha = 0.7f),
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                        // --- END MODIFICATION ---
                     }
                 }
             }

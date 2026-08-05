@@ -9,6 +9,10 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.Multipart
+import retrofit2.http.Part
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
 import java.util.concurrent.TimeUnit
 
 interface CopilotService {
@@ -17,11 +21,42 @@ interface CopilotService {
 
     @POST("api/v1/copilot/query")
     suspend fun queryCopilot(@Body request: QueryRequest): QueryResponse
+
+    @Multipart
+    @POST("api/v1/copilot/voice-query")
+    suspend fun queryCopilotVoice(
+        @Part file: MultipartBody.Part,
+        @Part("language") language: RequestBody
+    ): VoiceQueryResponse
+
+    @Multipart
+    @POST("api/v1/copilot/stt")
+    suspend fun sttOnly(
+        @Part file: MultipartBody.Part
+    ): SttResponse
+
+    @POST("api/v1/copilot/tts")
+    suspend fun generateTts(@Body request: TtsRequest): TtsResponse
 }
+
+data class SttResponse(
+    val transcript: String,
+    val latency_ms: Int
+)
 
 data class QueryRequest(
     val query: String,
     val language: String = "vi"
+)
+
+data class TtsRequest(
+    val text: String,
+    val language: String = "vi"
+)
+
+data class TtsResponse(
+    val audio_base64: String?,
+    val latency_ms: Int
 )
 
 data class CitationInfo(
@@ -38,6 +73,21 @@ data class QueryResponse(
     val audio_base64: String? = null,
     val citations: List<CitationInfo>,
     val status: String
+)
+
+data class LatencyMetrics(
+    val stt_ms: Int,
+    val core_ai_ms: Int,
+    val tts_ms: Int,
+    val total_ms: Int
+)
+
+data class VoiceQueryResponse(
+    val transcript: String,
+    val answer: String,
+    val audio_base64: String?,
+    val citations: List<CitationInfo>,
+    val latency: LatencyMetrics
 )
 
 // --- START MODIFICATION ---
