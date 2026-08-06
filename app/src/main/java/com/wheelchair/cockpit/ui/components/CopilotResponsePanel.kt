@@ -28,11 +28,33 @@ import com.wheelchair.cockpit.api.CitationInfo
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.AssistantState
 
+data class MessageTiming(
+    val rttMs: Long,
+    val sttMs: Int? = null,
+    val ragMs: Int? = null,
+    val ttsMs: Int? = null,
+    val totalMs: Long? = null
+)
+
 data class ChatMessage(
     val isUser: Boolean,
     val text: String,
-    val citations: List<CitationInfo> = emptyList()
+    val citations: List<CitationInfo> = emptyList(),
+    // MODIFIED: per-turn developer timing (null outside showLatency paths)
+    val timing: MessageTiming? = null
 )
+
+/** LM Studio-style footer: RTT always; stages only when present and > 0. */
+fun formatTimingLine(timing: MessageTiming): String {
+    val parts = listOfNotNull(
+        "RTT ${timing.rttMs}ms",
+        timing.sttMs?.takeIf { it > 0 }?.let { "STT ${it}ms" },
+        timing.ragMs?.takeIf { it > 0 }?.let { "RAG ${it}ms" },
+        timing.ttsMs?.takeIf { it > 0 }?.let { "TTS ${it}ms" },
+        timing.totalMs?.takeIf { it > 0 }?.let { "Total ${it}ms" }
+    )
+    return parts.joinToString(" · ")
+}
 
 @Composable
 fun CopilotResponsePanel(
@@ -53,7 +75,6 @@ fun CopilotResponsePanel(
     isDrivingRestricted: Boolean = false,
     showLatency: Boolean = false,
     showEvidence: Boolean = false,
-    lastQueryLatencyMs: Long? = null,
     lastHealthLatencyMs: Long? = null
     // --- END MODIFICATION ---
 ) {
@@ -85,18 +106,15 @@ fun CopilotResponsePanel(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // --- START MODIFICATION ---
-                    if (showLatency && (lastQueryLatencyMs != null || lastHealthLatencyMs != null)) {
+                    // Health-only chip; per-turn Query timing lives under assistant bubbles
+                    if (showLatency && lastHealthLatencyMs != null) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = primaryBlue.copy(alpha = 0.10f),
                             border = BorderStroke(1.dp, primaryBlue.copy(alpha = 0.22f))
                         ) {
                             Text(
-                                text = buildString {
-                                    lastQueryLatencyMs?.let { append("Query ${it}ms") }
-                                    if (lastQueryLatencyMs != null && lastHealthLatencyMs != null) append(" · ")
-                                    lastHealthLatencyMs?.let { append("Health ${it}ms") }
-                                },
+                                text = "Health ${lastHealthLatencyMs}ms",
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.SemiBold,
@@ -177,6 +195,19 @@ fun CopilotResponsePanel(
                                                     Spacer(modifier = Modifier.height(4.dp))
                                                 }
                                             }
+                                            // --- START MODIFICATION ---
+                                            // LM Studio-style stage timing under assistant turn
+                                            if (showLatency && msg.timing != null) {
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                Text(
+                                                    text = formatTimingLine(msg.timing),
+                                                    fontSize = 10.sp,
+                                                    color = textSecondary,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            // --- END MODIFICATION ---
                                         }
                                     }
                                 }

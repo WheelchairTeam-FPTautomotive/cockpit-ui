@@ -72,7 +72,9 @@ data class QueryResponse(
     val answer: String,
     val audio_base64: String? = null,
     val citations: List<CitationInfo>,
-    val status: String
+    val status: String,
+    // MODIFIED: optional gateway stage timings (null on legacy / mock / car-control)
+    val latency: LatencyMetrics? = null
 )
 
 data class LatencyMetrics(

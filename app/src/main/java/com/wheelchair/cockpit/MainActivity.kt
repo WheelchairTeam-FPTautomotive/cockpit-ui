@@ -741,7 +741,25 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = response.answer, citations = response.citations))
+        chatHistory.add(
+            com.wheelchair.cockpit.ui.components.ChatMessage(
+                isUser = false,
+                text = response.answer,
+                citations = response.citations,
+                timing = if (devSettingsStore.current().developerModeEnabled) {
+                    val lat = response.latency
+                    com.wheelchair.cockpit.ui.components.MessageTiming(
+                        rttMs = lat.total_ms.toLong().coerceAtLeast(0L),
+                        sttMs = lat.stt_ms.takeIf { it > 0 },
+                        ragMs = lat.core_ai_ms.takeIf { it > 0 },
+                        ttsMs = lat.tts_ms.takeIf { it > 0 },
+                        totalMs = lat.total_ms.takeIf { it > 0 }?.toLong()
+                    )
+                } else {
+                    null
+                }
+            )
+        )
         citations.value = response.citations
         statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đã nhận câu trả lời." else "Response received."
         
@@ -977,10 +995,28 @@ class MainActivity : ComponentActivity() {
                 val response = copilotRepository.sendQuery(query, language = langCode)
                 val elapsed = SystemClock.elapsedRealtime() - started
                 runOnUiThread {
-                    if (devSettingsStore.current().developerModeEnabled) {
+                    val dev = devSettingsStore.current().developerModeEnabled
+                    if (dev) {
                         lastQueryLatencyMs.value = elapsed
                     }
-                    chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = response.answer, citations = response.citations))
+                    val timing = if (dev) {
+                        com.wheelchair.cockpit.ui.components.MessageTiming(
+                            rttMs = elapsed,
+                            ragMs = response.latency?.core_ai_ms?.takeIf { it > 0 },
+                            ttsMs = response.latency?.tts_ms?.takeIf { it > 0 },
+                            totalMs = response.latency?.total_ms?.takeIf { it > 0 }?.toLong()
+                        )
+                    } else {
+                        null
+                    }
+                    chatHistory.add(
+                        com.wheelchair.cockpit.ui.components.ChatMessage(
+                            isUser = false,
+                            text = response.answer,
+                            citations = response.citations,
+                            timing = timing
+                        )
+                    )
                     citations.value = response.citations
                     if (response.audio_base64 != null) {
                         playBase64Audio(response.audio_base64, response.answer)
@@ -992,7 +1028,8 @@ class MainActivity : ComponentActivity() {
                 Log.e("CockpitUI", "Backend Error", e)
                 val elapsed = SystemClock.elapsedRealtime() - started
                 runOnUiThread {
-                    if (devSettingsStore.current().developerModeEnabled) {
+                    val dev = devSettingsStore.current().developerModeEnabled
+                    if (dev) {
                         lastQueryLatencyMs.value = elapsed
                     }
                     val fallback = if (appLanguage.value == AppLanguage.VIETNAMESE) {
@@ -1000,7 +1037,17 @@ class MainActivity : ComponentActivity() {
                     } else {
                         "Gemini/Backend Error: ${e.localizedMessage}"
                     }
-                    chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = fallback))
+                    chatHistory.add(
+                        com.wheelchair.cockpit.ui.components.ChatMessage(
+                            isUser = false,
+                            text = fallback,
+                            timing = if (dev) {
+                                com.wheelchair.cockpit.ui.components.MessageTiming(rttMs = elapsed)
+                            } else {
+                                null
+                            }
+                        )
+                    )
                     speakOut(fallback)
                 }
             }
@@ -1246,7 +1293,6 @@ fun CockpitAppScreen(
                     isDrivingRestricted = isDrivingRestricted,
                     showLatency = showDeveloperControls && devSettings.developerModeEnabled,
                     showEvidence = showDeveloperControls && devSettings.developerModeEnabled,
-                    lastQueryLatencyMs = lastQueryLatencyMs,
                     lastHealthLatencyMs = healthResult?.latencyMs
                     // --- END MODIFICATION ---
                 )
