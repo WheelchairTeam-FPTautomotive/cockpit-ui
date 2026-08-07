@@ -6,6 +6,14 @@
     <!-- Audio recording for Speech-to-Text -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- START MODIFICATION: Background wake FGS (#14) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- END MODIFICATION -->
+
     <!-- Car API permissions (Pre-granted on simulated Skycraft system runtime) -->
     <uses-permission android:name="android.car.permission.CAR_INFO" />
     <uses-permission android:name="android.car.permission.CAR_SPEED" />
@@ -36,7 +44,8 @@
 
         <activity
             android:name="com.wheelchair.cockpit.MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 
@@ -48,6 +57,13 @@
             </intent-filter>
             <meta-data android:name="distractionOptimized" android:value="true" />
         </activity>
+
+        <!-- START MODIFICATION: Microphone FGS for Hey Car standby -->
+        <service
+            android:name=".voice.WakeWordForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+        <!-- END MODIFICATION -->
     </application>
 
 </manifest>

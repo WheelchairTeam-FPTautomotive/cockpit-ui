@@ -1,10 +1,12 @@
 package com.wheelchair.cockpit
 
 import android.Manifest
+import android.app.NotificationManager
 import android.car.VehiclePropertyIds
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -46,6 +48,8 @@ import com.wheelchair.cockpit.ui.theme.CockpitColors
 import com.wheelchair.cockpit.vhal.CarPropertyHelper
 import com.wheelchair.cockpit.voice.MicDiag
 import com.wheelchair.cockpit.voice.PartialTranscriptPublisher
+import com.wheelchair.cockpit.voice.WakeWordEngine
+import com.wheelchair.cockpit.voice.WakeWordForegroundService
 import com.wheelchair.cockpit.voice.label
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +81,11 @@ class MainActivity : ComponentActivity() {
     private var isDrivingRestricted = mutableStateOf(false)
     private var hasWarnedSpeed = false
     private var safetyWarning = mutableStateOf<String?>(null)
+    // --- START MODIFICATION ---
+    // Mentor #17: mock actuation / RAG success motion overlay
+    private var mockActuation = mutableStateOf<MockActuationEvent?>(null)
+    private var mockActuationClearRunnable: Runnable? = null
+    // --- END MODIFICATION ---
 
     private var appLanguage = mutableStateOf(AppLanguage.VIETNAMESE)
     private var displayTheme = mutableStateOf(DisplayTheme.LIGHT)
@@ -96,6 +105,12 @@ class MainActivity : ComponentActivity() {
     private var autoSleepRunnable: Runnable? = null
     private var maxRmsInSession = 0f
 
+    // --- START MODIFICATION: Background wake FGS (#14) ---
+    /** Prefer microphone FGS; fall back to in-Activity [WakeWordEngine] if FGS start fails. */
+    private var wakeUsesFgs = false
+    private var fallbackWakeEngine: WakeWordEngine? = null
+    // --- END MODIFICATION ---
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         geminiApiKey.value = BuildConfig.GEMINI_API_KEY.ifEmpty { "ai_studio_api_key_here" }
@@ -109,6 +124,7 @@ class MainActivity : ComponentActivity() {
 
         checkAudioPermissions()
         initTextToSpeech()
+        handleWakeIntent(intent)
 
         carPropertyHelper = CarPropertyHelper(
             this,
@@ -161,6 +177,7 @@ class MainActivity : ComponentActivity() {
             val hvacTemp by carPropertyHelper.hvacTempFlow.collectAsState()
             val drivingRestricted by carPropertyHelper.uxRestrictionsFlow.collectAsState()
             val activeWarning by safetyWarning
+            val activeActuation by mockActuation
             // --- START MODIFICATION ---
             val devSettings by devSettingsStore.settings.collectAsState()
             LaunchedEffect(devSettings) {
@@ -261,9 +278,34 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+
+                // --- START MODIFICATION ---
+                // Mentor #17: mock door/music/HVAC/RAG success motion (not full-screen lock)
+                MockActuationOverlay(
+                    event = activeActuation,
+                    vietnamese = appLanguage.value == AppLanguage.VIETNAMESE,
+                    modifier = Modifier
+                        .align(androidx.compose.ui.Alignment.BottomCenter)
+                        .padding(bottom = 72.dp)
+                )
+                // --- END MODIFICATION ---
             }
         }
     }
+
+    // --- START MODIFICATION ---
+    private fun showMockActuation(event: MockActuationEvent) {
+        mockActuationClearRunnable?.let { mainHandler.removeCallbacks(it) }
+        mockActuation.value = event
+        val clear = Runnable {
+            if (mockActuation.value?.token == event.token) {
+                mockActuation.value = null
+            }
+        }
+        mockActuationClearRunnable = clear
+        mainHandler.postDelayed(clear, 2800L)
+    }
+    // --- END MODIFICATION ---
 
     private fun toggleHvacProperty() {
         val nextState = !isHvacOn.value
@@ -276,6 +318,13 @@ class MainActivity : ComponentActivity() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             permissionsToRequest.add(Manifest.permission.RECORD_AUDIO)
         }
+        // --- START MODIFICATION: wake FGS notification permission ---
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        // --- END MODIFICATION ---
         if (checkSelfPermission("android.car.permission.CAR_SPEED") != PackageManager.PERMISSION_GRANTED) {
             permissionsToRequest.add("android.car.permission.CAR_SPEED")
         }
@@ -457,18 +506,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private var voskModel: org.vosk.Model? = null
-    private var voskSpeechService: org.vosk.android.SpeechService? = null
-
+    // --- START MODIFICATION: wake standby via FGS (+ Activity fallback) ---
     private fun initAudioRecognizers() {
-        // --- START MODIFICATION ---
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             micDiagStatus.value = MicDiag.PERMISSION_DENIED
             return
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             Log.w("CockpitUI", "Local SpeechRecognizer not available. Falling back to backend STT.")
-            // Still unpack Vosk for wake-word if possible
         } else {
             micDiagStatus.value = MicDiag.OK
             speechRecognizer?.destroy()
@@ -531,82 +576,114 @@ class MainActivity : ComponentActivity() {
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
         }
-        // --- END MODIFICATION ---
 
-        // Unpack Vosk Model
-        org.vosk.android.StorageService.unpack(this, "model-en", "model",
-            { model ->
-                voskModel = model
-                if (assistantState.value == AssistantState.IDLE) {
-                    startVoskListening()
-                }
-            },
-            { e ->
-                Log.e("CockpitUI", "Failed to unpack Vosk model", e)
-            }
-        )
+        ensureWakeStandbyStarted()
     }
 
-    private val voskListener = object : org.vosk.android.RecognitionListener {
-        override fun onPartialResult(hypothesis: String?) {
-            if (hypothesis != null) {
-                Log.d("CockpitUI", "Vosk Partial: $hypothesis")
-                if (containsWakeWord(hypothesis)) triggerKeywordWake()
-            }
+    override fun onStart() {
+        super.onStart()
+        // while-in-use: start microphone FGS while Activity is foregrounded
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            ensureWakeStandbyStarted()
         }
-        override fun onResult(hypothesis: String?) {
-            if (hypothesis != null) {
-                Log.d("CockpitUI", "Vosk Result: $hypothesis")
-                if (containsWakeWord(hypothesis)) triggerKeywordWake()
-            }
-        }
-        override fun onFinalResult(hypothesis: String?) {}
-        override fun onError(e: Exception?) {
-            Log.e("CockpitUI", "Vosk Error", e)
-        }
-        override fun onTimeout() {}
     }
 
-    private fun startVoskListening() {
-        if (voskModel == null || assistantState.value != AssistantState.IDLE) return
-        if (voskSpeechService != null) {
-            voskSpeechService?.startListening(voskListener)
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWakeIntent(intent)
+    }
+
+    private fun handleWakeIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(WakeWordForegroundService.EXTRA_WAKE_DETECTED, false) != true) {
+            return
+        }
+        intent.removeExtra(WakeWordForegroundService.EXTRA_WAKE_DETECTED)
+        getSystemService(NotificationManager::class.java)
+            ?.cancel(WakeWordForegroundService.NOTIF_TRIGGER_ID)
+        triggerKeywordWake()
+    }
+
+    private fun ensureWakeStandbyStarted() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        if (wakeUsesFgs && WakeWordForegroundService.isRunning) {
+            if (assistantState.value == AssistantState.IDLE) {
+                WakeWordForegroundService.resume(this)
+            }
+            return
+        }
+        if (WakeWordForegroundService.startFailed) {
+            startFallbackWakeEngine()
             return
         }
         try {
-            val rec = org.vosk.Recognizer(voskModel, 16000.0f)
-            voskSpeechService = org.vosk.android.SpeechService(rec, 16000.0f)
-            voskSpeechService?.startListening(voskListener)
+            WakeWordForegroundService.start(this)
+            wakeUsesFgs = true
+            fallbackWakeEngine?.shutdown()
+            fallbackWakeEngine = null
+            Log.i("CockpitUI", "Wake standby via microphone FGS")
+            mainHandler.postDelayed({
+                if (WakeWordForegroundService.startFailed || !WakeWordForegroundService.isRunning) {
+                    Log.w("CockpitUI", "FGS wake failed; falling back to in-Activity engine")
+                    wakeUsesFgs = false
+                    startFallbackWakeEngine()
+                } else if (assistantState.value == AssistantState.IDLE) {
+                    WakeWordForegroundService.resume(this)
+                }
+            }, 1500)
         } catch (e: Exception) {
-            Log.e("CockpitUI", "Failed to start Vosk", e)
+            Log.e("CockpitUI", "Failed to start WakeWordForegroundService", e)
+            wakeUsesFgs = false
+            WakeWordForegroundService.startFailed = true
+            startFallbackWakeEngine()
         }
     }
 
-    private fun stopVoskListening() {
-        voskSpeechService?.cancel()
-        voskSpeechService?.shutdown()
-        voskSpeechService = null
+    private fun startFallbackWakeEngine() {
+        if (assistantState.value != AssistantState.IDLE) return
+        val engine = fallbackWakeEngine ?: WakeWordEngine(applicationContext, mainHandler).also {
+            fallbackWakeEngine = it
+        }
+        engine.prepareModel { ok ->
+            if (!ok) {
+                Log.e("CockpitUI", "Fallback wake model unpack failed")
+                return@prepareModel
+            }
+            if (assistantState.value != AssistantState.IDLE) return@prepareModel
+            engine.start(object : WakeWordEngine.Callbacks {
+                override fun onWakeDetected() {
+                    triggerKeywordWake()
+                }
+
+                override fun onRms(normalized: Float) {
+                    rmsLevel.floatValue = normalized
+                }
+
+                override fun onError(message: String) {
+                    Log.e("CockpitUI", "Fallback wake: $message")
+                }
+            })
+        }
     }
 
-    private fun containsWakeWord(text: String): Boolean {
-        val lower = text.lowercase(Locale.ROOT)
-        return lower.contains("hey car") || 
-               lower.contains("hay car") || 
-               lower.contains("hây ca") || 
-               lower.contains("hây car") || 
-               lower.contains("he ca") || 
-               lower.contains("hey call") ||
-               lower.contains("hay call") ||
-               lower.contains("he call") ||
-               lower.contains("take care") ||
-               lower.contains("xe ơi") || 
-               lower.contains("chào xe") ||
-               lower.matches(Regex(".*\\bhey\\b.*")) ||
-               lower.matches(Regex(".*\\bhi\\b.*")) ||
-               lower.matches(Regex(".*\\bhello\\b.*")) ||
-               lower.matches(Regex(".*\\bokay\\b.*")) ||
-               lower.matches(Regex(".*\\bok\\b.*"))
+    private fun startVoskListening() {
+        if (assistantState.value != AssistantState.IDLE) return
+        if (wakeUsesFgs && !WakeWordForegroundService.startFailed) {
+            WakeWordForegroundService.resume(this)
+            return
+        }
+        startFallbackWakeEngine()
     }
+
+    private fun stopVoskListening() {
+        if (wakeUsesFgs) {
+            WakeWordForegroundService.pause(this)
+        }
+        fallbackWakeEngine?.pause()
+    }
+    // --- END MODIFICATION ---
 
     private var customAudioRecord: android.media.AudioRecord? = null
     private var isCustomRecording = false
@@ -762,6 +839,14 @@ class MainActivity : ComponentActivity() {
         )
         citations.value = response.citations
         statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đã nhận câu trả lời." else "Response received."
+        // MODIFIED: #17 mock motion from voice command_id / RAG cites
+        val vi = appLanguage.value == AppLanguage.VIETNAMESE
+        mockActuationForCommandId(response.command_id)?.let { showMockActuation(it) }
+            ?: run {
+                if (response.citations.isNotEmpty()) {
+                    showMockActuation(mockActuationForRagSuccess(vi))
+                }
+            }
         
         if (!response.audio_base64.isNullOrEmpty()) {
             playBase64Audio(response.audio_base64, response.answer)
@@ -934,6 +1019,16 @@ class MainActivity : ComponentActivity() {
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
+                // MODIFIED: #17 mock HVAC motion
+                showMockActuation(
+                    MockActuationEvent(
+                        kind = MockActuationKind.HVAC,
+                        titleVi = "Điều hòa",
+                        titleEn = "Climate",
+                        subtitleVi = "Mô phỏng HVAC thành công",
+                        subtitleEn = "Mock HVAC actuation succeeded"
+                    )
+                )
                 speakOut(reply, forceEnglish = !replyIsVietnamese)
                 return
             }
@@ -955,9 +1050,43 @@ class MainActivity : ComponentActivity() {
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
+                // MODIFIED: #17 mock door motion
+                showMockActuation(
+                    MockActuationEvent(
+                        kind = MockActuationKind.DOOR,
+                        titleVi = "Cửa xe",
+                        titleEn = "Doors",
+                        subtitleVi = if (unlock) "Mô phỏng mở khóa cửa" else "Mô phỏng khóa cửa",
+                        subtitleEn = if (unlock) "Mock unlock succeeded" else "Mock lock succeeded"
+                    )
+                )
                 speakOut(reply, forceEnglish = !replyIsVietnamese)
                 return
             }
+        }
+
+        // 2b. Music mock (quick-action / voice) — mentor demo motion, not deep media
+        if (q.contains("nhạc") || q.contains("music") || q.contains("bài hát") || q.contains("play music")) {
+            val reply = if (replyIsVietnamese) {
+                "Đã bật nhạc (mô phỏng)."
+            } else {
+                "Music started (mock)."
+            }
+            chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = reply))
+            citations.value = emptyList()
+            assistantState.value = AssistantState.IDLE
+            statusText.value = reply
+            showMockActuation(
+                MockActuationEvent(
+                    kind = MockActuationKind.MUSIC,
+                    titleVi = "Âm nhạc",
+                    titleEn = "Music",
+                    subtitleVi = "Mô phỏng phát nhạc",
+                    subtitleEn = "Mock music playback started"
+                )
+            )
+            speakOut(reply, forceEnglish = !replyIsVietnamese)
+            return
         }
         
         // 3. Mirror Control
@@ -982,6 +1111,7 @@ class MainActivity : ComponentActivity() {
         }
 
         assistantState.value = AssistantState.PROCESSING
+        stopVoskListening()
         statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đang hỏi Copilot: \"$query\"" else "Asking Copilot: \"$query\""
         citations.value = emptyList()
         partialPublisher.clear()
@@ -1018,6 +1148,14 @@ class MainActivity : ComponentActivity() {
                         )
                     )
                     citations.value = response.citations
+                    // MODIFIED: #17 mock motion from command_id or RAG success
+                    val vi = replyIsVietnamese
+                    mockActuationForCommandId(response.command_id)?.let { showMockActuation(it) }
+                        ?: run {
+                            if (response.status == "success" && response.citations.isNotEmpty()) {
+                                showMockActuation(mockActuationForRagSuccess(vi))
+                            }
+                        }
                     if (response.audio_base64 != null) {
                         playBase64Audio(response.audio_base64, response.answer)
                     } else {
@@ -1100,9 +1238,10 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         stopGoogleListening()
-        stopVoskListening()
-        voskSpeechService?.shutdown()
-        voskModel?.close()
+        // Keep microphone FGS running across Activity teardown for background Hey Car.
+        // Only tear down the in-Activity fallback engine here.
+        fallbackWakeEngine?.shutdown()
+        fallbackWakeEngine = null
         speechRecognizer?.destroy()
         tts?.stop()
         tts?.shutdown()

@@ -102,13 +102,23 @@ The app connects to the `backend-orchestrator` gateway server.
 
 ---
 
-### 3. Grant Microphone Permissions
+### 3. Grant Microphone & Background Wake Permissions
 
-For the voice assistant to listen to audio input, grant microphone permissions via ADB:
+For the voice assistant to listen (including background “Hey Car” via microphone FGS), grant permissions via ADB:
 
 ```bash
 adb shell pm grant com.wheelchair.cockpit android.permission.RECORD_AUDIO
+adb shell pm grant com.wheelchair.cockpit android.permission.POST_NOTIFICATIONS
+# Optional emulator fast path (BAL exemption for instant bring-to-front):
+adb shell appops set com.wheelchair.cockpit SYSTEM_ALERT_WINDOW allow
 ```
+
+**Background wake verification (Car AVD):**
+
+1. Launch the app once (while-in-use starts `WakeWordForegroundService`), then press Home.
+2. **Without** `SYSTEM_ALERT_WINDOW`: say “Hey Car” → expect heads-up / full-screen wake notification; Logcat may show `Background activity start blocked` if any naked `startActivity` is attempted — FSI path should still open the HUD.
+3. **With** SAW granted: wake should snap `MainActivity` forward immediately.
+4. Typed RAG and in-app mic tap must keep working if the FGS is killed.
 
 Also enable host mic on the emulator every cold boot:
 
@@ -209,3 +219,8 @@ To test the Driver Distraction UI locks on **Carsky**, use the following ADB com
 #### Q4: Where are the citation / bibliography cards?
 
 * Citation cards are **evidence for developers/judges**. They appear only when **Developer mode** is enabled. Drivers see the short spoken answer only; the API still returns `citations` for the backend.
+
+#### Q5: Chat transcript + mock control motion (#17)
+
+* User and AI turns appear as chat bubbles in the Copilot panel.
+* On door / HVAC / music (mock) success, or RAG success with citations, a short **bottom mock actuation toast** animates in (Compose motion — not a full-screen lock).

@@ -71,24 +71,27 @@ data class QueryResponse(
     val query: String,
     val answer: String,
     val audio_base64: String? = null,
-    val citations: List<CitationInfo>,
+    // MODIFIED: gateway car-control contract (#17 / #19)
+    val command_id: String? = null,
+    val citations: List<CitationInfo> = emptyList(),
     val status: String,
     // MODIFIED: optional gateway stage timings (null on legacy / mock / car-control)
     val latency: LatencyMetrics? = null
 )
 
 data class LatencyMetrics(
-    val stt_ms: Int,
-    val core_ai_ms: Int,
-    val tts_ms: Int,
-    val total_ms: Int
+    val stt_ms: Int = 0,
+    val core_ai_ms: Int = 0,
+    val tts_ms: Int = 0,
+    val total_ms: Int = 0
 )
 
 data class VoiceQueryResponse(
     val transcript: String,
     val answer: String,
-    val audio_base64: String?,
-    val citations: List<CitationInfo>,
+    val audio_base64: String? = null,
+    val command_id: String? = null,
+    val citations: List<CitationInfo> = emptyList(),
     val latency: LatencyMetrics
 )
 
