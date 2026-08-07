@@ -2,6 +2,20 @@
 
 Automotive digital cockpit client for the **KMS AI Agent** voice-driven documentation assistant, built for **FPT Hackathon 2026**.
 
+## Table of Contents
+
+- [Core Features](#core-features)
+- [Setup & Prerequisites](#setup--prerequisites)
+  - [1. System Requirements](#1-system-requirements)
+  - [2. Setting Up the Android Automotive Emulator (AVD)](#2-setting-up-the-android-automotive-emulator-avd)
+- [Run & Deploy Guide](#run--deploy-guide)
+  - [1. Configure Backend Connection](#1-configure-backend-connection)
+  - [2. Choose Deployment Method](#2-choose-deployment-method)
+  - [3. Grant Microphone & Background Wake Permissions](#3-grant-microphone--background-wake-permissions)
+- [Project Architecture](#project-architecture)
+- [Safety & Driver Distraction Compliance (CarUxRestrictions)](#safety--driver-distraction-compliance-caruxrestrictions)
+- [Troubleshooting & FAQ](#troubleshooting--faq)
+
 ---
 
 ## ⚡ Core Features
@@ -113,12 +127,13 @@ adb shell pm grant com.wheelchair.cockpit android.permission.POST_NOTIFICATIONS
 adb shell appops set com.wheelchair.cockpit SYSTEM_ALERT_WINDOW allow
 ```
 
-**Background wake verification (Car AVD):**
+**Wake verification (Car AVD):**
 
-1. Launch the app once (while-in-use starts `WakeWordForegroundService`), then press Home.
-2. **Without** `SYSTEM_ALERT_WINDOW`: say “Hey Car” → expect heads-up / full-screen wake notification; Logcat may show `Background activity start blocked` if any naked `startActivity` is attempted — FSI path should still open the HUD.
-3. **With** SAW granted: wake should snap `MainActivity` forward immediately.
-4. Typed RAG and in-app mic tap must keep working if the FGS is killed.
+1. **Foreground:** keep Copilot open (IDLE) → say “Hey Car” → listening starts immediately with **no** “Tap to open Copilot” heads-up (`SINGLE_TOP` → `onNewIntent`).
+2. Launch the app once (while-in-use starts `WakeWordForegroundService`), then press Home.
+3. **Without** `SYSTEM_ALERT_WINDOW`: say “Hey Car” → expect heads-up / full-screen wake notification; Logcat may show `Background activity start blocked` if any naked `startActivity` is attempted — FSI path should still open the HUD.
+4. **With** SAW granted: wake should snap `MainActivity` forward immediately.
+5. Typed RAG and in-app mic tap must keep working if the FGS is killed.
 
 Also enable host mic on the emulator every cold boot:
 

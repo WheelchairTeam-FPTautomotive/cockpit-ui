@@ -18,13 +18,17 @@ import com.wheelchair.cockpit.MainActivity
 
 /**
  * Microphone FGS for standby "Hey Car" while the Activity may be backgrounded.
- * BAL-safe bring-to-front: full-screen intent notification first; SAW startActivity when granted.
+ * Foreground UI: SINGLE_TOP wake intent, no trigger heads-up.
+ * Background: BAL-safe FSI notification; SAW startActivity when granted.
  */
 // --- START MODIFICATION ---
 class WakeWordForegroundService : Service() {
 
     private var engine: WakeWordEngine? = null
     private var wakeArmed = true
+    /** Single-flight guard: model-ready + ACTION_RESUME must not overlap engine.start(). */
+    @Volatile
+    private var startInFlight = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -37,6 +41,7 @@ class WakeWordForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_PAUSE -> {
+                startInFlight = false
                 engine?.pause()
                 wakeArmed = false
                 return START_STICKY
@@ -47,6 +52,7 @@ class WakeWordForegroundService : Service() {
                 return START_STICKY
             }
             ACTION_STOP -> {
+                startInFlight = false
                 stopSelfSafe()
                 return START_NOT_STICKY
             }
@@ -68,31 +74,69 @@ class WakeWordForegroundService : Service() {
         return START_STICKY
     }
 
+    // MODIFIED: Idempotent / single-flight ensureListening to prevent overlapping start()
     private fun ensureListening() {
         if (!wakeArmed) {
+            startInFlight = false
             engine?.pause()
             return
         }
         val eng = engine ?: return
-        eng.start(object : WakeWordEngine.Callbacks {
-            override fun onWakeDetected() {
-                if (!wakeArmed) return
-                wakeArmed = false
-                eng.pause()
-                bringActivityForward()
-            }
+        if (startInFlight) {
+            Log.d(TAG, "ensureListening skipped — start already in flight")
+            return
+        }
+        startInFlight = true
+        try {
+            eng.start(object : WakeWordEngine.Callbacks {
+                override fun onWakeDetected() {
+                    if (!wakeArmed) return
+                    wakeArmed = false
+                    startInFlight = false
+                    eng.pause()
+                    bringActivityForward()
+                }
 
-            override fun onError(message: String) {
-                Log.e(TAG, "Wake FGS engine: $message")
+                override fun onError(message: String) {
+                    startInFlight = false
+                    Log.e(TAG, "Wake FGS engine: $message")
+                }
+            })
+            // start() is synchronous for capture setup; clear in-flight unless we paused mid-call.
+            if (wakeArmed) {
+                startInFlight = false
             }
-        })
+        } catch (t: Throwable) {
+            startInFlight = false
+            throw t
+        }
     }
 
     private fun bringActivityForward() {
-        // 1) Primary: high-importance FSI notification (BAL-privileged for FGS).
+        // --- START MODIFICATION ---
+        // Already in Copilot UI: no "Tap to open" heads-up; deliver EXTRA_WAKE via SINGLE_TOP.
+        if (MainActivity.isUiForeground) {
+            getSystemService(NotificationManager::class.java)?.cancel(NOTIF_TRIGGER_ID)
+            try {
+                startActivity(
+                    wakeActivityIntent().addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    )
+                )
+                Log.i(TAG, "Wake foreground short-circuit (no FSI notification)")
+            } catch (e: Exception) {
+                Log.w(TAG, "Foreground wake startActivity failed; falling back to FSI", e)
+                postWakeFullScreenNotification()
+            }
+            return
+        }
+
+        // Background: high-importance FSI notification (BAL-privileged for FGS).
         postWakeFullScreenNotification()
 
-        // 2) Emulator fast path: SYSTEM_ALERT_WINDOW is a BAL exemption.
+        // Emulator fast path: SYSTEM_ALERT_WINDOW is a BAL exemption.
         if (Settings.canDrawOverlays(this)) {
             try {
                 startActivity(
@@ -109,6 +153,7 @@ class WakeWordForegroundService : Service() {
         } else {
             Log.i(TAG, "SAW not granted; relying on full-screen intent notification")
         }
+        // --- END MODIFICATION ---
     }
 
     private fun wakeActivityIntent(): Intent {

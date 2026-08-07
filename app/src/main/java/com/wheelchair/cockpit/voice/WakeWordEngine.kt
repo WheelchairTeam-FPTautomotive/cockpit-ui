@@ -13,8 +13,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Standby wake-word capture: prefers [VoskWakeRecorder] (MIC), falls back to stock [SpeechService].
+ *
+ * Sole owner of [Recognizer.close] for the VoskWakeRecorder path. After [SpeechService.shutdown],
+ * the recognizer is treated as already freed (no second close).
  */
 // --- START MODIFICATION ---
+// Refactored: single Recognizer ownership; join/close outside lock; idempotent start/resume
 class WakeWordEngine(
     private val appContext: Context,
     private val mainHandler: Handler = Handler(Looper.getMainLooper())
@@ -30,6 +34,8 @@ class WakeWordEngine(
     private var recognizer: Recognizer? = null
     private var recorder: VoskWakeRecorder? = null
     private var speechService: SpeechService? = null
+    /** True when SpeechService owns/frees the current recognizer. */
+    private var speechServiceOwnsRecognizer = false
     private var callbacks: Callbacks? = null
     private val running = AtomicBoolean(false)
     private val paused = AtomicBoolean(false)
@@ -59,120 +65,120 @@ class WakeWordEngine(
     }
 
     fun start(callbacks: Callbacks) {
+        val m: Model
         synchronized(lock) {
             this.callbacks = callbacks
-            val m = model ?: run {
+            m = model ?: run {
                 callbacks.onError("Vosk model not ready")
                 return
             }
-            if (running.get()) {
-                resume()
+            if (running.get() && !paused.get()) {
+                // Already listening — refresh callbacks only; avoid start→resume→start recursion.
                 return
             }
             paused.set(false)
-            stopCaptureLocked(releaseRecognizer = true)
+        }
 
-            val listener = object : RecognitionListener {
-                override fun onPartialResult(hypothesis: String?) {
-                    if (paused.get()) return
-                    if (hypothesis != null && WakeWordMatcher.containsWakeWord(hypothesis)) {
-                        Log.d(TAG, "Wake partial: $hypothesis")
-                        callbacks.onWakeDetected()
-                    }
-                }
+        stopCapture(releaseRecognizer = true)
 
-                override fun onResult(hypothesis: String?) {
-                    if (paused.get()) return
-                    if (hypothesis != null && WakeWordMatcher.containsWakeWord(hypothesis)) {
-                        Log.d(TAG, "Wake result: $hypothesis")
-                        callbacks.onWakeDetected()
-                    }
-                }
-
-                override fun onFinalResult(hypothesis: String?) {}
-                override fun onError(e: Exception?) {
-                    Log.e(TAG, "Wake engine error", e)
-                    callbacks.onError(e?.message ?: "wake error")
-                }
-
-                override fun onTimeout() {}
-            }
-
-            val rmsListener = object : VoskWakeRecorder.RmsListener {
-                override fun onRms(normalized: Float) {
-                    if (!paused.get()) callbacks.onRms(normalized)
+        val listener = object : RecognitionListener {
+            override fun onPartialResult(hypothesis: String?) {
+                if (paused.get()) return
+                if (hypothesis != null && WakeWordMatcher.containsWakeWord(hypothesis)) {
+                    Log.d(TAG, "Wake partial: $hypothesis")
+                    callbacks.onWakeDetected()
                 }
             }
 
+            override fun onResult(hypothesis: String?) {
+                if (paused.get()) return
+                if (hypothesis != null && WakeWordMatcher.containsWakeWord(hypothesis)) {
+                    Log.d(TAG, "Wake result: $hypothesis")
+                    callbacks.onWakeDetected()
+                }
+            }
+
+            override fun onFinalResult(hypothesis: String?) {}
+            override fun onError(e: Exception?) {
+                Log.e(TAG, "Wake engine error", e)
+                callbacks.onError(e?.message ?: "wake error")
+            }
+
+            override fun onTimeout() {}
+        }
+
+        val rmsListener = object : VoskWakeRecorder.RmsListener {
+            override fun onRms(normalized: Float) {
+                if (!paused.get()) callbacks.onRms(normalized)
+            }
+        }
+
+        try {
+            val rec = Recognizer(m, SAMPLE_RATE.toFloat())
+            val wakeRecorder = VoskWakeRecorder(rec, SAMPLE_RATE, mainHandler)
+            wakeRecorder.start(appContext, listener, rmsListener)
+            synchronized(lock) {
+                recognizer = rec
+                recorder = wakeRecorder
+                speechService = null
+                speechServiceOwnsRecognizer = false
+                running.set(true)
+                paused.set(false)
+            }
+            Log.i(TAG, "Wake engine started via VoskWakeRecorder")
+        } catch (e: Exception) {
+            Log.w(TAG, "VoskWakeRecorder failed; falling back to SpeechService", e)
             try {
                 val rec = Recognizer(m, SAMPLE_RATE.toFloat())
-                recognizer = rec
-                val wakeRecorder = VoskWakeRecorder(rec, SAMPLE_RATE, mainHandler)
-                wakeRecorder.start(appContext, listener, rmsListener)
-                recorder = wakeRecorder
-                running.set(true)
-                Log.i(TAG, "Wake engine started via VoskWakeRecorder")
-            } catch (e: Exception) {
-                Log.w(TAG, "VoskWakeRecorder failed; falling back to SpeechService", e)
-                try {
-                    val rec = Recognizer(m, SAMPLE_RATE.toFloat())
+                val service = SpeechService(rec, SAMPLE_RATE.toFloat())
+                service.startListening(listener)
+                synchronized(lock) {
                     recognizer = rec
-                    val service = SpeechService(rec, SAMPLE_RATE.toFloat())
-                    service.startListening(listener)
+                    recorder = null
                     speechService = service
+                    speechServiceOwnsRecognizer = true
                     running.set(true)
-                    Log.i(TAG, "Wake engine started via SpeechService fallback")
-                } catch (fallback: Exception) {
-                    Log.e(TAG, "Failed to start wake engine", fallback)
-                    callbacks.onError(fallback.message ?: "start failed")
-                    running.set(false)
+                    paused.set(false)
                 }
+                Log.i(TAG, "Wake engine started via SpeechService fallback")
+            } catch (fallback: Exception) {
+                Log.e(TAG, "Failed to start wake engine", fallback)
+                callbacks.onError(fallback.message ?: "start failed")
+                running.set(false)
             }
         }
     }
 
     fun pause() {
         paused.set(true)
-        synchronized(lock) {
-            // Release the mic so post-wake STT / TTS can open AudioRecord.
-            try {
-                recorder?.stop()
-            } catch (_: Exception) {
-            }
-            recorder = null
-            speechService?.let {
-                try {
-                    it.cancel()
-                } catch (_: Exception) {
-                }
-            }
-            running.set(false)
-        }
+        // Release the mic so post-wake STT / TTS can open AudioRecord.
+        // Keep Recognizer alive only if we will reuse it; current design restarts capture on resume,
+        // so release the native handle fully to avoid stale state.
+        stopCapture(releaseRecognizer = true)
+        running.set(false)
     }
 
     fun resume() {
+        val cb: Callbacks
         synchronized(lock) {
             paused.set(false)
-            val cb = callbacks ?: return
+            cb = callbacks ?: return
             if (model == null) return
-            // Restart capture after pause released the mic.
-            running.set(false)
-            start(cb)
+            if (running.get()) return
         }
+        start(cb)
     }
 
     fun stop() {
-        synchronized(lock) {
-            paused.set(true)
-            stopCaptureLocked(releaseRecognizer = true)
-            running.set(false)
-        }
+        paused.set(true)
+        stopCapture(releaseRecognizer = true)
+        running.set(false)
     }
 
     fun shutdown() {
+        stopCapture(releaseRecognizer = true)
+        running.set(false)
         synchronized(lock) {
-            stopCaptureLocked(releaseRecognizer = true)
-            running.set(false)
             callbacks = null
             try {
                 model?.close()
@@ -183,24 +189,57 @@ class WakeWordEngine(
         }
     }
 
-    private fun stopCaptureLocked(releaseRecognizer: Boolean) {
+    /**
+     * Tear down capture safely:
+     * under lock — snapshot refs and clear fields;
+     * outside lock — stop audio / join / close Recognizer once (engine-owned path only).
+     */
+    private fun stopCapture(releaseRecognizer: Boolean) {
+        val recToStop: VoskWakeRecorder?
+        val serviceToStop: SpeechService?
+        val recognizerToClose: Recognizer?
+        val speechOwned: Boolean
+
+        synchronized(lock) {
+            recToStop = recorder
+            serviceToStop = speechService
+            speechOwned = speechServiceOwnsRecognizer
+            recognizerToClose = if (releaseRecognizer && !speechServiceOwnsRecognizer) {
+                recognizer
+            } else {
+                null
+            }
+            recorder = null
+            speechService = null
+            if (releaseRecognizer) {
+                recognizer = null
+                speechServiceOwnsRecognizer = false
+            }
+        }
+
+        // Outside lock: join / native free must not hold WakeWordEngine monitor.
         try {
-            recorder?.shutdown()
+            recToStop?.stop()
         } catch (_: Exception) {
         }
-        recorder = null
-        try {
-            speechService?.cancel()
-            speechService?.shutdown()
-        } catch (_: Exception) {
-        }
-        speechService = null
-        if (releaseRecognizer) {
+
+        if (serviceToStop != null) {
             try {
-                recognizer?.close()
+                serviceToStop.cancel()
             } catch (_: Exception) {
             }
-            recognizer = null
+            try {
+                serviceToStop.shutdown()
+            } catch (_: Exception) {
+            }
+            // SpeechService.shutdown() already frees its Recognizer — do not close again.
+        }
+
+        if (recognizerToClose != null && !speechOwned) {
+            try {
+                recognizerToClose.close()
+            } catch (_: Exception) {
+            }
         }
     }
 

@@ -25,8 +25,11 @@ import kotlin.math.sqrt
  * opens a silent input on Car AVDs even when host-mic is enabled. This recorder prefers
  * [MediaRecorder.AudioSource.MIC], pins a built-in/virtual mic when possible, and reports
  * buffer RMS so the HUD waveform can prove audio is arriving during standby.
+ *
+ * Does NOT own [Recognizer] lifecycle — [WakeWordEngine] is the sole caller of [Recognizer.close].
  */
 // --- START MODIFICATION ---
+// Refactored: no Recognizer.close(); AudioRecord.stop() before join to unblock read()
 class VoskWakeRecorder(
     private val recognizer: Recognizer,
     private val sampleRate: Int = 16_000,
@@ -45,7 +48,7 @@ class VoskWakeRecorder(
     @SuppressLint("MissingPermission")
     fun start(context: Context, listener: RecognitionListener, rmsListener: RmsListener? = null) {
         if (running.get()) return
-        stopInternal(releaseRecognizer = false)
+        stop()
 
         val audioRecord = buildAudioRecord(context)
             ?: throw IOException("Failed to initialize AudioRecord for Vosk wake capture.")
@@ -68,6 +71,7 @@ class VoskWakeRecorder(
                 val buffer = ShortArray(bufferSize)
                 while (running.get() && !Thread.currentThread().isInterrupted) {
                     val nread = audioRecord.read(buffer, 0, buffer.size)
+                    if (!running.get()) break
                     if (nread <= 0) continue
                     if (paused.get()) continue
 
@@ -76,20 +80,27 @@ class VoskWakeRecorder(
                         mainHandler.post { it.onRms(level) }
                     }
 
+                    if (!running.get()) break
                     if (recognizer.acceptWaveForm(buffer, nread)) {
+                        if (!running.get()) break
                         val result = recognizer.getResult()
                         mainHandler.post { listener.onResult(result) }
                     } else {
+                        if (!running.get()) break
                         val partial = recognizer.partialResult
                         mainHandler.post { listener.onPartialResult(partial) }
                     }
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "Vosk wake capture failed", t)
-                mainHandler.post { listener.onError(Exception(t)) }
+                if (running.get()) {
+                    Log.e(TAG, "Vosk wake capture failed", t)
+                    mainHandler.post { listener.onError(Exception(t)) }
+                }
             } finally {
                 try {
-                    audioRecord.stop()
+                    if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                        audioRecord.stop()
+                    }
                 } catch (_: Exception) {
                 }
             }
@@ -100,38 +111,40 @@ class VoskWakeRecorder(
         paused.set(value)
     }
 
+    /**
+     * Stops the worker and releases AudioRecord only.
+     * Order: running=false → AudioRecord.stop() (unblocks read) → join → release.
+     */
     fun stop() {
-        stopInternal(releaseRecognizer = false)
-    }
-
-    fun shutdown() {
-        stopInternal(releaseRecognizer = true)
-    }
-
-    private fun stopInternal(releaseRecognizer: Boolean) {
         running.set(false)
+        paused.set(false)
+
+        val audioRecord = recorder
+        // Unblock any blocking AudioRecord.read() before joining the worker.
+        if (audioRecord != null) {
+            try {
+                if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    audioRecord.stop()
+                }
+            } catch (_: Exception) {
+            }
+        }
+
         worker?.interrupt()
         try {
-            worker?.join(750)
+            worker?.join(JOIN_TIMEOUT_MS)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
         }
         worker = null
 
-        recorder?.let {
+        if (audioRecord != null) {
             try {
-                it.release()
+                audioRecord.release()
             } catch (_: Exception) {
             }
         }
         recorder = null
-
-        if (releaseRecognizer) {
-            try {
-                recognizer.close()
-            } catch (_: Exception) {
-            }
-        }
     }
 
     @SuppressLint("MissingPermission")
@@ -199,6 +212,7 @@ class VoskWakeRecorder(
     companion object {
         private const val TAG = "CockpitUI"
         private const val BUFFER_SIZE_SECONDS = 0.2f
+        private const val JOIN_TIMEOUT_MS = 1500L
     }
 }
 // --- END MODIFICATION ---

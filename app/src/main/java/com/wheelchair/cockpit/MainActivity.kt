@@ -588,6 +588,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // --- START MODIFICATION ---
+    // Foreground wake: FGS skips FSI heads-up when UI is resumed (onPause, not onStop).
+    override fun onResume() {
+        super.onResume()
+        isUiForeground = true
+    }
+
+    override fun onPause() {
+        isUiForeground = false
+        super.onPause()
+    }
+    // --- END MODIFICATION ---
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -1247,6 +1260,14 @@ class MainActivity : ComponentActivity() {
         tts?.shutdown()
         carPropertyHelper.shutdown()
     }
+
+    // --- START MODIFICATION ---
+    companion object {
+        /** True while MainActivity is between onResume and onPause (interactive foreground). */
+        @Volatile
+        var isUiForeground: Boolean = false
+    }
+    // --- END MODIFICATION ---
 }
 
 @Composable
