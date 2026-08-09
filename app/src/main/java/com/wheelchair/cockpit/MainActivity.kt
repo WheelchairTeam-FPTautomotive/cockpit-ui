@@ -216,14 +216,12 @@ class MainActivity : ComponentActivity() {
                     healthResult = healthResult.value,
                     healthChecking = healthChecking.value,
                     onDeveloperModeChange = { enabled ->
-                        CoroutineScope(Dispatchers.IO).launch {
-                            devSettingsStore.setDeveloperModeEnabled(enabled)
-                        }
+                        // MODIFIED: sync flag so effectiveBaseUrl switches immediately
+                        devSettingsStore.applyDeveloperModeNow(enabled)
                     },
                     onBaseUrlApply = { url ->
-                        CoroutineScope(Dispatchers.IO).launch {
-                            devSettingsStore.setBaseUrl(url)
-                        }
+                        // MODIFIED: sync snapshot before next OkHttp call (no race with health/query)
+                        devSettingsStore.applyBaseUrlNow(url)
                     },
                     onMockRagChange = { enabled ->
                         CoroutineScope(Dispatchers.IO).launch {
@@ -239,6 +237,9 @@ class MainActivity : ComponentActivity() {
                         CoroutineScope(Dispatchers.IO).launch {
                             devSettingsStore.setHttpLogLevel(level)
                         }
+                    },
+                    onShowCitationCardsChange = { enabled ->
+                        devSettingsStore.applyShowCitationCardsNow(enabled)
                     },
                     onHealthCheck = { runHealthCheck() },
                     // --- START MODIFICATION ---
@@ -1302,6 +1303,7 @@ fun CockpitAppScreen(
     onMockRagChange: (Boolean) -> Unit = {},
     onBypassDrivingChange: (Boolean) -> Unit = {},
     onHttpLogLevelChange: (HttpLogLevel) -> Unit = {},
+    onShowCitationCardsChange: (Boolean) -> Unit = {},
     onHealthCheck: () -> Unit = {},
     // --- START MODIFICATION ---
     partialTranscript: String = "",
@@ -1452,7 +1454,8 @@ fun CockpitAppScreen(
                     micDiagLabel = micDiagLabel,
                     isDrivingRestricted = isDrivingRestricted,
                     showLatency = showDeveloperControls && devSettings.developerModeEnabled,
-                    showEvidence = showDeveloperControls && devSettings.developerModeEnabled,
+                    // MODIFIED: citation cards controlled by developer-mode toggle
+                    showEvidence = showDeveloperControls && devSettings.effectiveShowCitationCards,
                     lastHealthLatencyMs = healthResult?.latencyMs
                     // --- END MODIFICATION ---
                 )
@@ -1495,6 +1498,7 @@ fun CockpitAppScreen(
             onMockRagChange = onMockRagChange,
             onBypassDrivingChange = onBypassDrivingChange,
             onHttpLogLevelChange = onHttpLogLevelChange,
+            onShowCitationCardsChange = onShowCitationCardsChange,
             onHealthCheck = onHealthCheck,
             appVersionName = BuildConfig.VERSION_NAME,
             // --- START MODIFICATION ---
