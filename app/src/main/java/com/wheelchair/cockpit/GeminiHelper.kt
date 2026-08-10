@@ -11,14 +11,18 @@ object GeminiHelper {
     // Initialized from BuildConfig (loaded from .env or local.properties), or user input UI
     private var userApiKey: String = BuildConfig.GEMINI_API_KEY.takeIf { it != "YOUR_GEMINI_API_KEY_HERE" } ?: ""
 
+    // --- START MODIFICATION ---
+    // Answer language follows cockpit UI setting, not the driver's input language.
     private const val SYSTEM_INSTRUCTION = """
 You are Wheelchair Copilot, an intelligent, empathetic, and ultra-helpful AI automotive assistant inside an Android Automotive vehicle cockpit.
 Guidelines:
 1. Provide concise, clear, and safe responses suitable for a driver operating a vehicle.
-2. Answer queries in the same language the driver spoke in (Vietnamese if spoken in Vietnamese, English if spoken in English).
+2. Answer ONLY in the UI language selected in the cockpit (Vietnamese or English), regardless of whether the driver typed or spoke in VI, EN, or mixed code-switch.
 3. Keep answers under 3-4 sentences so Text-To-Speech can pronounce it clearly without distracting the driver.
 4. If asked vehicle technical questions (tire pressure, service schedule, HVAC, controls), give accurate, reassuring guidance.
+5. Prefer native vocabulary for the UI language (e.g. Vietnamese replies say "điều hòa", not "air conditioner").
 """
+    // --- END MODIFICATION ---
 
     fun setApiKey(apiKey: String) {
         userApiKey = apiKey

@@ -619,16 +619,23 @@ class MainActivity : ComponentActivity() {
             !(BuildConfig.DEBUG && devSettingsStore.current().effectiveBypassDrivingLock)
     }
 
-    private fun speakOut(text: String, forceEnglish: Boolean = false, localOnly: Boolean = false) {
+    // --- START MODIFICATION ---
+    // Tone-fold for mixed VI/EN intent match (bật ≡ bat, điều hòa ≡ dieu hoa)
+    private fun foldVi(text: String): String {
+        val lowered = text.lowercase(Locale.ROOT).replace('đ', 'd').replace('Đ', 'd')
+        val nfd = java.text.Normalizer.normalize(lowered, java.text.Normalizer.Form.NFD)
+        return nfd.replace(Regex("\\p{Mn}+"), "")
+    }
+
+    // MODIFIED: TTS voice follows AppLanguage only (not answer diacritics)
+    private fun speakOut(text: String, localOnly: Boolean = false) {
         stopGoogleListening()
         stopVoskListening()
         assistantState.value = AssistantState.SPEAKING
-        
-        // Auto-detect language based on text content (Vietnamese diacritics)
-        val isVietnamese = if (forceEnglish) false else Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(text)
+
+        val isVietnamese = appLanguage.value == AppLanguage.VIETNAMESE
         val langStr = if (isVietnamese) "vi" else "en"
 
-        // Fire request to the remote Edge-TTS service in the background
         if (!localOnly) {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
@@ -642,45 +649,41 @@ class MainActivity : ComponentActivity() {
                 } catch (e: Exception) {
                     Log.e("CockpitUI", "Remote TTS failed: ${e.message}")
                 }
-                // Fallback to local TTS if remote fails or returns empty audio
-                runOnUiThread { speakOut(text, forceEnglish, localOnly = true) }
+                runOnUiThread { speakOut(text, localOnly = true) }
             }
             return
         }
 
-        // Fallback to local TTS (only reached if localOnly is true)
-        if (localOnly) {
-            runOnUiThread {
-                val loc = if (isVietnamese) Locale("vi", "VN") else Locale.US
-                val result = tts?.setLanguage(loc)
-                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    tts?.setLanguage(Locale.US)
-                }
-
-                // Hackathon trick: Phonetic replacement for basic AOSP TTS
-                var speakText = text
-                if (isVietnamese) {
-                    speakText = speakText
-                        .replace(Regex("\\bAC\\b"), "Ây Xi")
-                        .replace(Regex("\\bHVAC\\b"), "Hát Vát")
-                        .replace(Regex("\\bADAS\\b"), "Ây Đát")
-                        .replace(Regex("\\bGPS\\b"), "Gờ Pê Ét")
-                        .replace(Regex("\\bCopilot\\b", RegexOption.IGNORE_CASE), "Cô Pai Lọt")
-                        .replace(Regex("\\bBluetooth\\b", RegexOption.IGNORE_CASE), "Bờ Lu Tút")
-                } else {
-                    speakText = speakText
-                        .replace(Regex("\\bHà Nội\\b", RegexOption.IGNORE_CASE), "Ha-Noy")
-                        .replace(Regex("\\bViệt Nam\\b", RegexOption.IGNORE_CASE), "Vee-etnahm")
-                        .replace(Regex("\\bHồ Chí Minh\\b", RegexOption.IGNORE_CASE), "Ho Chee Min")
-                        .replace(Regex("\\bđiều hòa\\b", RegexOption.IGNORE_CASE), "deew hwa")
-                }
-
-                val params = Bundle()
-                params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "CockpitTTS")
-                tts?.speak(speakText, TextToSpeech.QUEUE_FLUSH, params, "CockpitTTS")
+        runOnUiThread {
+            val loc = if (isVietnamese) Locale("vi", "VN") else Locale.US
+            val result = tts?.setLanguage(loc)
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                tts?.setLanguage(Locale.US)
             }
+
+            var speakText = text
+            if (isVietnamese) {
+                speakText = speakText
+                    .replace(Regex("\\bAC\\b"), "Ây Xi")
+                    .replace(Regex("\\bHVAC\\b"), "Hát Vát")
+                    .replace(Regex("\\bADAS\\b"), "Ây Đát")
+                    .replace(Regex("\\bGPS\\b"), "Gờ Pê Ét")
+                    .replace(Regex("\\bCopilot\\b", RegexOption.IGNORE_CASE), "Cô Pai Lọt")
+                    .replace(Regex("\\bBluetooth\\b", RegexOption.IGNORE_CASE), "Bờ Lu Tút")
+            } else {
+                speakText = speakText
+                    .replace(Regex("\\bHà Nội\\b", RegexOption.IGNORE_CASE), "Ha-Noy")
+                    .replace(Regex("\\bViệt Nam\\b", RegexOption.IGNORE_CASE), "Vee-etnahm")
+                    .replace(Regex("\\bHồ Chí Minh\\b", RegexOption.IGNORE_CASE), "Ho Chee Min")
+                    .replace(Regex("\\bđiều hòa\\b", RegexOption.IGNORE_CASE), "deew hwa")
+            }
+
+            val params = Bundle()
+            params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "CockpitTTS")
+            tts?.speak(speakText, TextToSpeech.QUEUE_FLUSH, params, "CockpitTTS")
         }
     }
+    // --- END MODIFICATION ---
 
     // --- START MODIFICATION: wake standby via FGS (+ Activity fallback) ---
     private fun initAudioRecognizers() {
@@ -909,63 +912,161 @@ class MainActivity : ComponentActivity() {
         Thread {
             try {
                 val sampleRate = 16000
-                val minBufferSize = android.media.AudioRecord.getMinBufferSize(sampleRate, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT)
-                if (androidx.core.app.ActivityCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) return@Thread
-                
-                customAudioRecord = android.media.AudioRecord(android.media.MediaRecorder.AudioSource.MIC, sampleRate, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, minBufferSize * 2)
-                
+                val minBufferSize = android.media.AudioRecord.getMinBufferSize(
+                    sampleRate,
+                    android.media.AudioFormat.CHANNEL_IN_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT
+                )
+                if (androidx.core.app.ActivityCompat.checkSelfPermission(
+                        this,
+                        android.Manifest.permission.RECORD_AUDIO
+                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    return@Thread
+                }
+
+                customAudioRecord = android.media.AudioRecord(
+                    android.media.MediaRecorder.AudioSource.MIC,
+                    sampleRate,
+                    android.media.AudioFormat.CHANNEL_IN_MONO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT,
+                    minBufferSize * 2
+                )
+
                 val pcmData = java.io.ByteArrayOutputStream()
                 customAudioRecord?.startRecording()
-                
+
                 val buffer = ByteArray(minBufferSize)
-                val endTime = System.currentTimeMillis() + 4000 // record for 4 seconds
-                
-                while (isCustomRecording && System.currentTimeMillis() < endTime) {
+                // --- START MODIFICATION ---
+                // Waveform VAD: wait for speech onset, then end on sustained silence
+                // (not a fixed 4s timer). Hard caps keep the session bounded.
+                val speechRmsThreshold = 0.12f
+                val silenceRmsThreshold = 0.08f
+                val silenceToEndMs = 900L
+                val maxWaitForSpeechMs = 8_000L
+                val maxRecordMs = 15_000L
+                val minSpeechMs = 400L
+
+                val sessionStart = System.currentTimeMillis()
+                var speechStarted = false
+                var speechStartAt = 0L
+                var lastLoudAt = 0L
+                var silenceStartedAt = 0L
+
+                while (isCustomRecording) {
+                    val now = System.currentTimeMillis()
+                    val elapsed = now - sessionStart
+                    if (elapsed >= maxRecordMs) break
+                    if (!speechStarted && elapsed >= maxWaitForSpeechMs) break
+
                     val read = customAudioRecord?.read(buffer, 0, buffer.size) ?: 0
-                    if (read > 0) {
-                        pcmData.write(buffer, 0, read)
-                        var sum = 0.0
-                        for (i in 0 until read step 2) {
-                            val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
-                            sum += sample * sample
+                    if (read <= 0) continue
+
+                    pcmData.write(buffer, 0, read)
+
+                    var sum = 0.0
+                    val sampleCount = read / 2
+                    for (i in 0 until read step 2) {
+                        val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
+                        val signed = if (sample > 32767) sample - 65536 else sample
+                        sum += signed.toDouble() * signed.toDouble()
+                    }
+                    val rms = if (sampleCount > 0) {
+                        Math.sqrt(sum / sampleCount).toFloat()
+                    } else {
+                        0f
+                    }
+                    val rmsdB = if (rms > 0) {
+                        20 * kotlin.math.log10(rms.toDouble()).toFloat()
+                    } else {
+                        -80f
+                    }
+                    val normalized = ((rmsdB - 30f) / 50f).coerceIn(0f, 1f)
+                    runOnUiThread {
+                        rmsLevel.floatValue = normalized
+                        if (normalized > maxRmsInSession) maxRmsInSession = normalized
+                    }
+
+                    if (!speechStarted) {
+                        if (normalized >= speechRmsThreshold) {
+                            speechStarted = true
+                            speechStartAt = now
+                            lastLoudAt = now
+                            silenceStartedAt = 0L
+                            runOnUiThread { resetAutoSleepTimer() }
                         }
-                        val rms = Math.sqrt(sum / (read / 2)).toFloat()
-                        val rmsdB = if (rms > 0) 20 * kotlin.math.log10(rms.toDouble()).toFloat() else -80f
-                        val normalized = ((rmsdB - 30f) / 50f).coerceIn(0f, 1f)
-                        runOnUiThread { rmsLevel.floatValue = normalized }
+                        continue
+                    }
+
+                    if (normalized >= silenceRmsThreshold) {
+                        lastLoudAt = now
+                        silenceStartedAt = 0L
+                    } else {
+                        if (silenceStartedAt == 0L) silenceStartedAt = now
+                        val spokeLongEnough = (now - speechStartAt) >= minSpeechMs
+                        val silentLongEnough = (now - silenceStartedAt) >= silenceToEndMs
+                        if (spokeLongEnough && silentLongEnough) {
+                            Log.i(
+                                "CockpitUI",
+                                "VAD end-of-speech after ${now - speechStartAt}ms " +
+                                    "(silence=${now - silenceStartedAt}ms, lastLoudAgo=${now - lastLoudAt}ms)"
+                            )
+                            break
+                        }
                     }
                 }
-                
+                // --- END MODIFICATION ---
+
                 customAudioRecord?.stop()
                 customAudioRecord?.release()
                 customAudioRecord = null
-                
+
+                val captured = pcmData.toByteArray()
+                if (!speechStarted || captured.isEmpty()) {
+                    runOnUiThread {
+                        rmsLevel.floatValue = 0f
+                        assistantState.value = AssistantState.IDLE
+                        statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                            "Không nghe thấy giọng nói. Trở về Standby."
+                        } else {
+                            "No speech detected. Returning to Standby."
+                        }
+                        startVoskListening()
+                    }
+                    return@Thread
+                }
+
                 runOnUiThread {
                     rmsLevel.floatValue = 0f
-                    statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đang gửi âm thanh xử lý..." else "Processing audio..."
+                    statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                        "Đang gửi âm thanh xử lý..."
+                    } else {
+                        "Processing audio..."
+                    }
                 }
-                
-                val wavBytes = addWavHeader(pcmData.toByteArray(), sampleRate)
-                
+
+                val wavBytes = addWavHeader(captured, sampleRate)
+
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                     try {
                         val requestBody = okhttp3.RequestBody.create("audio/wav".toMediaType(), wavBytes)
                         val part = okhttp3.MultipartBody.Part.createFormData("file", "audio.wav", requestBody)
-                        // MODIFIED: send UI locale to /copilot/stt (was computed then ignored)
                         val lang = if (appLanguage.value == AppLanguage.VIETNAMESE) "vi" else "en"
                         val langBody = lang.toRequestBody("text/plain".toMediaType())
 
-                        // 1. Get STT instantly and show on UI
                         val sttResponse = com.wheelchair.cockpit.api.CopilotClient.service.sttOnly(part, langBody)
                         val transcript = sttResponse.transcript
-                        
+
                         withContext(kotlinx.coroutines.Dispatchers.Main) {
                             partialPublisher.clear()
                             partialTranscript.value = transcript
-                            statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đang suy nghĩ..." else "Thinking..."
+                            statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                                "Đang suy nghĩ..."
+                            } else {
+                                "Thinking..."
+                            }
                         }
-                        
-                        // 2. Local Intent parsing (re-using existing processUserSpeech)
+
                         withContext(kotlinx.coroutines.Dispatchers.Main) {
                             processUserSpeech(transcript)
                         }
@@ -978,11 +1079,10 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                
-            } catch(e: Exception) {
+            } catch (e: Exception) {
                 Log.e("CockpitUI", "Recording failed", e)
-                runOnUiThread { 
-                    assistantState.value = AssistantState.IDLE 
+                runOnUiThread {
+                    assistantState.value = AssistantState.IDLE
                     startVoskListening()
                 }
             }
@@ -1041,14 +1141,12 @@ class MainActivity : ComponentActivity() {
                     showMockActuation(mockActuationForRagSuccess(vi))
                 }
             }
-        
-        // FIX: Check if the actual answer text contains Vietnamese diacritics.
-        val answerHasViDiacritics = Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(response.answer)
-        
-        if (!response.audio_base64.isNullOrEmpty() && answerHasViDiacritics == vi) {
+
+        // MODIFIED: TTS follows UI language; backend audio already synthesized with UI locale
+        if (!response.audio_base64.isNullOrEmpty()) {
             playBase64Audio(response.audio_base64, response.answer)
         } else {
-            speakOut(response.answer, forceEnglish = !answerHasViDiacritics)
+            speakOut(response.answer)
         }
     }
 
@@ -1126,18 +1224,14 @@ class MainActivity : ComponentActivity() {
             chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = true, text = query))
         }
 
-        // VHAL Speed-sensitive Safety Gate for Mirror Folding
+        // --- START MODIFICATION ---
+        // Mirror safety gate: match on tone-folded text (gập ≡ gap, gương ≡ guong)
+        val qFold = foldVi(query)
         val currentSpeed = carPropertyHelper.speedFlow.value
         val drivingLocked = isEffectiveDrivingRestricted()
-        val isFoldAction = query.contains("gập", ignoreCase = true) || 
-                           query.contains("đóng", ignoreCase = true) || 
-                           query.contains("thu", ignoreCase = true) || 
-                           query.contains("cất", ignoreCase = true) || 
-                           query.contains("fold", ignoreCase = true) || 
-                           query.contains("close", ignoreCase = true) || 
-                           query.contains("retract", ignoreCase = true)
-        val isMirrorTarget = query.contains("gương", ignoreCase = true) || 
-                             query.contains("mirror", ignoreCase = true)
+        val isFoldAction = listOf("gap", "dong", "thu", "cat", "fold", "close", "retract")
+            .any { qFold.contains(it) }
+        val isMirrorTarget = qFold.contains("guong") || qFold.contains("mirror")
         val isMirrorFoldingRequest = isFoldAction && isMirrorTarget
         
         if (isMirrorFoldingRequest && (drivingLocked || currentSpeed > 0f)) {
@@ -1153,7 +1247,6 @@ class MainActivity : ComponentActivity() {
             statusText.value = warningText
             safetyWarning.value = warningText
             
-            // Auto-dismiss safety warning banner after 5 seconds
             mainHandler.postDelayed({
                 if (safetyWarning.value == warningText) {
                     safetyWarning.value = null
@@ -1163,33 +1256,84 @@ class MainActivity : ComponentActivity() {
             speakOut(warningText)
             return
         }
-        val q = query.lowercase(Locale.ROOT)
-        
-        // Auto-detect query language for dynamic response
-        val isQueryVietnamese = Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(query)
-        val isQueryEnglish = Regex("\\b(turn|on|off|open|close|fold|unfold|door|mirror|ac|hvac|air|condition|how|what|why|who|where|when|is|are|am|was|were|the|a|an|to|can|you|i|he|she|it|they|we|hello|hi|please|set|make|do|does|did|will|would|could|should|can|test|car|system|music|play|stop|volume|temp|temperature)\\b", RegexOption.IGNORE_CASE).containsMatchIn(query)
-        val replyIsVietnamese = if (isQueryVietnamese) true else if (isQueryEnglish) false else appLanguage.value == AppLanguage.VIETNAMESE
-        
-        // --- LOCAL VHAL INTENT PARSING ---
-        
+
+        // MODIFIED: reply language = UI AppLanguage only (ignore input VI/EN/mixed)
+        val replyIsVietnamese = appLanguage.value == AppLanguage.VIETNAMESE
+        val langCode = if (replyIsVietnamese) "vi" else "en"
+
+        // --- LOCAL VHAL INTENT PARSING (tone-folded mixed VI/EN) ---
+
+        // Temp cue vs volume: "van ... 22 do/°C" → HVAC; "van volume xuong" → volume
+        val tempMatch = Regex("""(\d+)\s*(do|degrees?|c|°c)""").find(qFold)
+        val mentionsTemp =
+            qFold.contains("nhiet do") ||
+                qFold.contains("temperature") ||
+                tempMatch != null
+        val mentionsVolume =
+            qFold.contains("volume") ||
+                qFold.contains("am luong")
+        val mentionsHvac =
+            qFold.contains("dieu hoa") ||
+                qFold.contains("may lanh") ||
+                qFold.contains("air condition") ||
+                Regex("""\bac\b""").containsMatchIn(qFold) ||
+                qFold.contains("a/c") ||
+                qFold.contains("hvac") ||
+                mentionsTemp
+
+        // 0. Volume (requires volume/am luong keyword — not bare "van ... °C")
+        if (mentionsVolume && !mentionsTemp) {
+            val down = listOf("xuong", "down", "giam", "nho").any { qFold.contains(it) } ||
+                qFold.contains("volume down")
+            val up = listOf("len", "up", "tang").any { qFold.contains(it) } ||
+                qFold.contains("volume up") ||
+                qFold.contains("to len")
+            if (down || up) {
+                val cur = mediaRepository.getMusicVolumeFraction()
+                val next = if (up) {
+                    (cur + 0.1f).coerceAtMost(1f)
+                } else {
+                    (cur - 0.1f).coerceAtLeast(0f)
+                }
+                mediaRepository.setMusicVolumeFraction(next)
+                val reply = if (replyIsVietnamese) {
+                    if (up) "Đã tăng âm lượng." else "Đã giảm âm lượng."
+                } else {
+                    if (up) "Volume increased." else "Volume decreased."
+                }
+                chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = reply))
+                citations.value = emptyList()
+                assistantState.value = AssistantState.IDLE
+                statusText.value = reply
+                speakOut(reply)
+                return
+            }
+        }
+
         // 1. HVAC Control
-        val tempMatch = Regex("(\\d+)\\s*(độ|degrees|degree|c)").find(q)
-        if (q.contains("điều hòa") || q.contains("máy lạnh") || q.contains("ac") || q.contains("a/c") || q.contains("air condition") || q.contains("nhiệt độ") || tempMatch != null) {
-            val turnOn = q.contains("bật") || q.contains("mở") || q.contains("turn on")
-            val turnOff = q.contains("tắt") || q.contains("turn off")
-            val adjust = q.contains("tăng") || q.contains("giảm") || q.contains("turn up") || q.contains("turn down")
-            
+        if (mentionsHvac) {
+            val turnOn = qFold.contains("bat") || qFold.contains("mo") ||
+                qFold.contains("turn on")
+            val turnOff = qFold.contains("tat") || qFold.contains("turn off")
+            val adjust = qFold.contains("tang") || qFold.contains("giam") ||
+                qFold.contains("turn up") || qFold.contains("turn down") ||
+                qFold.contains("van")
+
             if (turnOn || turnOff || adjust || tempMatch != null) {
                 if (!turnOn && !turnOff && !isHvacOn.value) {
-                    val rejectReply = if (replyIsVietnamese) "Điều hòa đang tắt, không thể điều chỉnh nhiệt độ." else "AC is currently off, cannot adjust temperature."
+                    val rejectReply = if (replyIsVietnamese) {
+                        "Điều hòa đang tắt, không thể điều chỉnh nhiệt độ."
+                    } else {
+                        "Air conditioning is off; cannot adjust temperature."
+                    }
                     chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = rejectReply))
                     citations.value = emptyList()
                     assistantState.value = AssistantState.IDLE
                     statusText.value = rejectReply
-                    speakOut(rejectReply, forceEnglish = !replyIsVietnamese)
+                    speakOut(rejectReply)
                     return
                 }
-                
+
                 if (turnOn) {
                     carPropertyHelper.setHvacState(0, true)
                     isHvacOn.value = true
@@ -1197,27 +1341,42 @@ class MainActivity : ComponentActivity() {
                     carPropertyHelper.setHvacState(0, false)
                     isHvacOn.value = false
                 }
-                
-                var reply = if (replyIsVietnamese) "Đã " + (if (turnOn) "bật" else if (turnOff) "tắt" else "điều chỉnh") + " điều hòa" else "HVAC " + (if (turnOn) "turned on" else if (turnOff) "turned off" else "adjusted")
-                
+
+                // Native vocabulary: never echo "air conditioner" into VI TTS
+                var reply = if (replyIsVietnamese) {
+                    "Đã " + (when {
+                        turnOn -> "bật"
+                        turnOff -> "tắt"
+                        else -> "điều chỉnh"
+                    }) + " điều hòa"
+                } else {
+                    when {
+                        turnOn -> "Air conditioning turned on"
+                        turnOff -> "Air conditioning turned off"
+                        else -> "Air conditioning adjusted"
+                    }
+                }
+
                 if (tempMatch != null) {
                     val tempValue = tempMatch.groupValues[1].toFloatOrNull()
                     if (tempValue != null) {
-                        // VHAL HVAC_TEMPERATURE_SET natively expects Celsius. 
-                        // If user says "62" (Fahrenheit), we auto-convert it to Celsius (~16.6C)
-                        val actualCelsius = if (tempValue > 40f) ((tempValue - 32f) * 5f / 9f) else tempValue
+                        val actualCelsius =
+                            if (tempValue > 40f) ((tempValue - 32f) * 5f / 9f) else tempValue
                         carPropertyHelper.setHvacTemperature(0, actualCelsius)
-                        reply += if (replyIsVietnamese) " ở mức $tempValue độ." else " to $tempValue degrees."
+                        reply += if (replyIsVietnamese) {
+                            " ở mức ${tempValue.toInt()} độ."
+                        } else {
+                            " to ${tempValue.toInt()} degrees."
+                        }
                     }
                 } else {
                     reply += "."
                 }
-                
+
                 chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = reply))
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
-                // MODIFIED: #17 mock HVAC motion
                 showMockActuation(
                     MockActuationEvent(
                         kind = MockActuationKind.HVAC,
@@ -1227,16 +1386,17 @@ class MainActivity : ComponentActivity() {
                         subtitleEn = "Mock HVAC actuation succeeded"
                     )
                 )
-                speakOut(reply, forceEnglish = !replyIsVietnamese)
+                speakOut(reply)
                 return
             }
         }
-        
+
         // 2. Door Control — blocked while driving lock is on
-        if (q.contains("cửa") || q.contains("door")) {
-            val unlock = q.contains("mở") || q.contains("unlock") || q.contains("open")
-            val lock = q.contains("khóa") || q.contains("đóng") || q.contains("lock") || q.contains("close")
-            
+        if (qFold.contains("cua") || qFold.contains("door")) {
+            val unlock = qFold.contains("mo") || qFold.contains("unlock") || qFold.contains("open")
+            val lock = qFold.contains("khoa") || qFold.contains("dong") ||
+                qFold.contains("lock") || qFold.contains("close")
+
             if (unlock || lock) {
                 if (drivingLocked) {
                     val rejectReply = if (replyIsVietnamese) {
@@ -1248,7 +1408,7 @@ class MainActivity : ComponentActivity() {
                     citations.value = emptyList()
                     assistantState.value = AssistantState.IDLE
                     statusText.value = rejectReply
-                    speakOut(rejectReply, forceEnglish = !replyIsVietnamese)
+                    speakOut(rejectReply)
                     return
                 }
                 carPropertyHelper.setDoorLock(0, lock)
@@ -1261,7 +1421,6 @@ class MainActivity : ComponentActivity() {
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
-                // MODIFIED: #17 mock door motion
                 showMockActuation(
                     MockActuationEvent(
                         kind = MockActuationKind.DOOR,
@@ -1271,26 +1430,28 @@ class MainActivity : ComponentActivity() {
                         subtitleEn = if (unlock) "Mock unlock succeeded" else "Mock lock succeeded"
                     )
                 )
-                speakOut(reply, forceEnglish = !replyIsVietnamese)
+                speakOut(reply)
                 return
             }
         }
 
         // 2b. Music transport via MediaControllerRepository (voice allowed while driving)
-        val mentionsMusic = q.contains("nhạc") || q.contains("music") || q.contains("bài hát") ||
-            q.contains("youtube music") || q.contains("soundcloud") || q.contains("play music") ||
-            q.contains("pause music") || q.contains("next song") || q.contains("previous song") ||
-            q.contains("bài tiếp") || q.contains("bài trước") || q.contains("dừng nhạc")
-        val pauseMusicPhrase = (q.contains("tạm dừng") || q.contains("pause") || q.contains("dừng")) &&
-            (q.contains("nhạc") || q.contains("music") || q.contains("bài"))
+        val mentionsMusic = listOf(
+            "nhac", "music", "bai hat", "youtube music", "soundcloud",
+            "play music", "pause music", "next song", "previous song",
+            "bai tiep", "bai truoc", "dung nhac"
+        ).any { qFold.contains(it) }
+        val pauseMusicPhrase =
+            (qFold.contains("tam dung") || qFold.contains("pause") || qFold.contains("dung")) &&
+                (qFold.contains("nhac") || qFold.contains("music") || qFold.contains("bai"))
         if (mentionsMusic || pauseMusicPhrase) {
-            val wantPause = pauseMusicPhrase || q.contains("pause music") || q.contains("stop music") ||
-                q.contains("dừng nhạc")
-            val wantNext = q.contains("next") || q.contains("bài tiếp") || q.contains("skip")
-            val wantPrev = q.contains("previous") || q.contains("bài trước") || q.contains("prev")
-            val wantLocal = q.contains("local") || q.contains("nội bộ") || q.contains("trên xe")
-            val wantYt = q.contains("youtube")
-            val wantSc = q.contains("soundcloud")
+            val wantPause = pauseMusicPhrase || qFold.contains("pause music") ||
+                qFold.contains("stop music") || qFold.contains("dung nhac")
+            val wantNext = qFold.contains("next") || qFold.contains("bai tiep") || qFold.contains("skip")
+            val wantPrev = qFold.contains("previous") || qFold.contains("bai truoc") || qFold.contains("prev")
+            val wantLocal = qFold.contains("local") || qFold.contains("noi bo") || qFold.contains("tren xe")
+            val wantYt = qFold.contains("youtube")
+            val wantSc = qFold.contains("soundcloud")
 
             when {
                 wantLocal -> mediaRepository.setSourcePreference(MediaSourcePreference.LOCAL)
@@ -1332,15 +1493,16 @@ class MainActivity : ComponentActivity() {
                     subtitleEn = reply
                 )
             )
-            speakOut(reply, forceEnglish = !replyIsVietnamese)
+            speakOut(reply)
             return
         }
-        
+
         // 3. Mirror Control — blocked while driving lock is on
-        if (q.contains("gương") || q.contains("mirror")) {
-            val unfold = q.contains("mở") || q.contains("unfold") || q.contains("open")
-            val fold = q.contains("gập") || q.contains("đóng") || q.contains("fold") || q.contains("close")
-            
+        if (qFold.contains("guong") || qFold.contains("mirror")) {
+            val unfold = qFold.contains("mo") || qFold.contains("unfold") || qFold.contains("open")
+            val fold = qFold.contains("gap") || qFold.contains("dong") ||
+                qFold.contains("fold") || qFold.contains("close")
+
             if (unfold || fold) {
                 if (drivingLocked) {
                     val rejectReply = if (replyIsVietnamese) {
@@ -1352,7 +1514,7 @@ class MainActivity : ComponentActivity() {
                     citations.value = emptyList()
                     assistantState.value = AssistantState.IDLE
                     statusText.value = rejectReply
-                    speakOut(rejectReply, forceEnglish = !replyIsVietnamese)
+                    speakOut(rejectReply)
                     return
                 }
                 carPropertyHelper.setMirrorFold(0, fold)
@@ -1365,23 +1527,24 @@ class MainActivity : ComponentActivity() {
                 citations.value = emptyList()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = reply
-                speakOut(reply, forceEnglish = !replyIsVietnamese)
+                speakOut(reply)
                 return
             }
         }
 
         assistantState.value = AssistantState.PROCESSING
         stopVoskListening()
-        statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đang hỏi Copilot: \"$query\"" else "Asking Copilot: \"$query\""
+        statusText.value = if (replyIsVietnamese) {
+            "Đang hỏi Copilot: \"$query\""
+        } else {
+            "Asking Copilot: \"$query\""
+        }
         citations.value = emptyList()
         partialPublisher.clear()
 
-        // --- START MODIFICATION ---
-        // Query path through repository; publish latency only in developer mode.
         CoroutineScope(Dispatchers.IO).launch {
             val started = SystemClock.elapsedRealtime()
             try {
-                val langCode = if (replyIsVietnamese) "vi" else "en"
                 val response = copilotRepository.sendQuery(
                     query,
                     language = langCode,
@@ -1415,7 +1578,6 @@ class MainActivity : ComponentActivity() {
                         )
                     )
                     citations.value = response.citations
-                    // MODIFIED: #17 mock motion from command_id or RAG success
                     val vi = replyIsVietnamese
                     mockActuationForCommandId(response.command_id)?.let { showMockActuation(it) }
                         ?: run {
@@ -1423,16 +1585,11 @@ class MainActivity : ComponentActivity() {
                                 showMockActuation(mockActuationForRagSuccess(vi))
                             }
                         }
-                    // FIX: Check if the actual answer text contains Vietnamese diacritics.
-                    // If the user asked in Vietnamese ("HVAC là gì") but the LLM replied in English (no diacritics),
-                    // the backend's pre-generated audio will incorrectly use the Vietnamese voice to read English text.
-                    val answerHasViDiacritics = Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(response.answer)
-                    
-                    if (response.audio_base64 != null && answerHasViDiacritics == vi) {
+                    // MODIFIED: play backend audio (UI lang) or re-speak with UI voice
+                    if (!response.audio_base64.isNullOrEmpty()) {
                         playBase64Audio(response.audio_base64, response.answer)
                     } else {
-                        // Discard the backend's audio (it used the wrong voice) and request a new one with the correct language.
-                        speakOut(response.answer, forceEnglish = !answerHasViDiacritics)
+                        speakOut(response.answer)
                     }
                 }
             } catch (e: Exception) {
@@ -1443,7 +1600,7 @@ class MainActivity : ComponentActivity() {
                     if (dev) {
                         lastQueryLatencyMs.value = elapsed
                     }
-                    val fallback = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+                    val fallback = if (replyIsVietnamese) {
                         "Lỗi kết nối Server: ${e.localizedMessage}"
                     } else {
                         "Gemini/Backend Error: ${e.localizedMessage}"
