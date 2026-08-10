@@ -7,9 +7,19 @@ import com.wheelchair.cockpit.dev.DevSettingsStore
 
 // --- START MODIFICATION ---
 class RemoteCopilotDataSource : CopilotDataSource {
-    override suspend fun query(query: String, language: String): QueryResponse {
+    override suspend fun query(
+        query: String,
+        language: String,
+        sessionId: String?,
+        sessionTtlMin: Int?
+    ): QueryResponse {
         return CopilotClient.service.queryCopilot(
-            QueryRequest(query = query, language = language)
+            QueryRequest(
+                query = query,
+                language = language,
+                session_id = sessionId,
+                session_ttl_min = sessionTtlMin
+            )
         )
     }
 
@@ -38,8 +48,13 @@ class CopilotRepository(
     private fun activeSource(): CopilotDataSource =
         if (store.current().effectiveMockRag) mock else remote
 
-    suspend fun sendQuery(query: String, language: String = "vi"): QueryResponse =
-        activeSource().query(query, language)
+    suspend fun sendQuery(
+        query: String,
+        language: String = "vi",
+        sessionId: String? = null,
+        sessionTtlMin: Int? = 5
+    ): QueryResponse =
+        activeSource().query(query, language, sessionId, sessionTtlMin)
 
     suspend fun checkHealth(): HealthResult = activeSource().checkHealth()
 }

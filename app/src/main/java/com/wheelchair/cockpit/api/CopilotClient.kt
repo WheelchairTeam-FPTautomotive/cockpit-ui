@@ -31,8 +31,10 @@ interface CopilotService {
 
     @Multipart
     @POST("api/v1/copilot/stt")
+    // MODIFIED: pass UI language so gateway STT uses en-US / vi-VN
     suspend fun sttOnly(
-        @Part file: MultipartBody.Part
+        @Part file: MultipartBody.Part,
+        @Part("language") language: RequestBody
     ): SttResponse
 
     @POST("api/v1/copilot/tts")
@@ -46,7 +48,10 @@ data class SttResponse(
 
 data class QueryRequest(
     val query: String,
-    val language: String = "vi"
+    val language: String = "vi",
+    // MODIFIED: gateway STM session (0/3/5/10 min idle TTL)
+    val session_id: String? = null,
+    val session_ttl_min: Int? = 5
 )
 
 data class TtsRequest(
@@ -76,7 +81,11 @@ data class QueryResponse(
     val citations: List<CitationInfo> = emptyList(),
     val status: String,
     // MODIFIED: optional gateway stage timings (null on legacy / mock / car-control)
-    val latency: LatencyMetrics? = null
+    val latency: LatencyMetrics? = null,
+    // MODIFIED: short-term memory session echo
+    val session_id: String? = null,
+    val session_active: Boolean? = null,
+    val stm_turns: Int? = null
 )
 
 data class LatencyMetrics(

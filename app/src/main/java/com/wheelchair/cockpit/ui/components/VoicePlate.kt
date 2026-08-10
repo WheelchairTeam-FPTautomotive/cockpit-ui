@@ -9,6 +9,8 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,9 +18,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -27,22 +29,33 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.CopilotUiState
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 /**
- * AAOS bottom voice plate.
+ * AAOS voice status plate.
  *
- * Enters/exits from the bottom, shows listening/thinking/speaking states, and
- * anchors above the system dock so it never covers climate or nav affordances.
+ * Anchored at the top of the content column (not over the side rail).
+ * Speaking auto-hides after a short delay; swipe up/aside to dismiss anytime.
  */
 @Composable
 fun VoicePlate(
@@ -57,38 +70,92 @@ fun VoicePlate(
     outlineVariant: Color,
     modifier: Modifier = Modifier
 ) {
-    val active = state is CopilotUiState.Listening ||
-            state is CopilotUiState.Thinking ||
-            state is CopilotUiState.Speaking
+    val sessionActive = state is CopilotUiState.Listening ||
+        state is CopilotUiState.Thinking ||
+        state is CopilotUiState.Speaking
     val vi = appLanguage == AppLanguage.VIETNAMESE
+
+    // --- START MODIFICATION ---
+    // User can swipe away; Speaking also auto-clears so Settings stays reachable
+    var userDismissed by remember { mutableStateOf(false) }
+    var dragX by remember { mutableFloatStateOf(0f) }
+    var dragY by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    val dismissPx = with(density) { 72.dp.toPx() }
+
+    LaunchedEffect(state) {
+        userDismissed = false
+        dragX = 0f
+        dragY = 0f
+        if (state is CopilotUiState.Speaking) {
+            delay(2_200L)
+            userDismissed = true
+        }
+    }
+
+    val active = sessionActive && !userDismissed
+    // --- END MODIFICATION ---
 
     AnimatedVisibility(
         visible = active,
         enter = slideInVertically(
             animationSpec = tween(320, easing = FastOutSlowInEasing),
-            initialOffsetY = { it }
+            initialOffsetY = { -it }
         ) + fadeIn(tween(240)),
         exit = slideOutVertically(
             animationSpec = tween(260),
-            targetOffsetY = { it }
+            targetOffsetY = { -it }
         ) + fadeOut(tween(200)),
         modifier = modifier
     ) {
+        // MODIFIED: fix Vietnamese typo "trả lởi" → "trả lời"
         val (label, showWaveform) = when (state) {
             is CopilotUiState.Listening ->
                 (if (vi) "Đang lắng nghe…" else "Listening…") to true
             is CopilotUiState.Thinking ->
                 (if (vi) "Đang suy nghĩ…" else "Thinking…") to true
             is CopilotUiState.Speaking ->
-                (if (vi) "Đang trả lởi…" else "Speaking…") to false
+                (if (vi) "Đang trả lời…" else "Speaking…") to false
             else -> "" to false
         }
 
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 8.dp, bottomEnd = 8.dp),
+                .padding(horizontal = 16.dp)
+                .offset { IntOffset(dragX.roundToInt(), dragY.roundToInt()) }
+                .pointerInput(state) {
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            if (dragY < -dismissPx * 0.45f) {
+                                userDismissed = true
+                            }
+                            dragY = 0f
+                        },
+                        onDragCancel = { dragY = 0f },
+                        onVerticalDrag = { change, amount ->
+                            change.consume()
+                            // Prefer swipe-up dismiss from top plate
+                            dragY = (dragY + amount).coerceAtMost(0f)
+                        }
+                    )
+                }
+                .pointerInput(state) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (kotlin.math.abs(dragX) > dismissPx * 0.55f) {
+                                userDismissed = true
+                            }
+                            dragX = 0f
+                        },
+                        onDragCancel = { dragX = 0f },
+                        onHorizontalDrag = { change, amount ->
+                            change.consume()
+                            dragX += amount
+                        }
+                    )
+                },
+            shape = RoundedCornerShape(16.dp),
             color = surfaceColor,
             border = BorderStroke(1.dp, outlineVariant),
             shadowElevation = 8.dp
@@ -100,7 +167,6 @@ fun VoicePlate(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Status mic/wave icon
                 Box(
                     modifier = Modifier
                         .size(44.dp)
@@ -141,6 +207,14 @@ fun VoicePlate(
                             fontStyle = FontStyle.Italic,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
+                        )
+                    } else if (state is CopilotUiState.Speaking) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = if (vi) "Vuốt lên để ẩn" else "Swipe up to hide",
+                            color = textSecondary,
+                            fontSize = 12.sp,
+                            maxLines = 1
                         )
                     }
                 }

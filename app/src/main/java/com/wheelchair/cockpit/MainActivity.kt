@@ -20,11 +20,13 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -42,6 +44,8 @@ import com.wheelchair.cockpit.data.HealthResult
 import com.wheelchair.cockpit.dev.DevSettings
 import com.wheelchair.cockpit.dev.DevSettingsStore
 import com.wheelchair.cockpit.dev.HttpLogLevel
+import com.wheelchair.cockpit.media.MediaControllerRepository
+import com.wheelchair.cockpit.media.MediaSourcePreference
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.AssistantState
 import com.wheelchair.cockpit.model.ControlKind
@@ -71,6 +75,8 @@ class MainActivity : ComponentActivity() {
     // --- START MODIFICATION ---
     private lateinit var devSettingsStore: DevSettingsStore
     private lateinit var copilotRepository: CopilotRepository
+    // MODIFIED: multi-app media hub
+    private lateinit var mediaRepository: MediaControllerRepository
     // --- END MODIFICATION ---
 
     private var tts: TextToSpeech? = null
@@ -90,6 +96,8 @@ class MainActivity : ComponentActivity() {
     private var vehicleSpeed = mutableFloatStateOf(0.0f)
     private var isHvacOn = mutableStateOf(false)
     private var isDrivingRestricted = mutableStateOf(false)
+    // MODIFIED: rate-limit spoken cue when user taps locked UI (~3s)
+    private var lastLockedInteractionAtMs: Long = 0L
     private var hasWarnedSpeed = false
     private var safetyWarning = mutableStateOf<String?>(null)
     // --- START MODIFICATION ---
@@ -107,6 +115,11 @@ class MainActivity : ComponentActivity() {
     private var partialTranscript = mutableStateOf("")
     private var micDiagStatus = mutableStateOf(MicDiag.IDLE)
     private var lastQueryLatencyMs = mutableStateOf<Long?>(null)
+    // MODIFIED: gateway STM session (idle TTL 0/3/5/10)
+    private var sessionId: String = java.util.UUID.randomUUID().toString()
+    private var sessionTtlMin = mutableStateOf(5)
+    private var stmTurns = mutableStateOf(0)
+    private var sessionPausedAtMs: Long = 0L
     private val partialPublisher = PartialTranscriptPublisher(mainHandler = mainHandler) { text ->
         partialTranscript.value = text
     }
@@ -130,6 +143,9 @@ class MainActivity : ComponentActivity() {
         devSettingsStore = DevSettingsStore(this)
         CopilotClient.init(devSettingsStore)
         copilotRepository = CopilotRepository(devSettingsStore)
+        // MODIFIED: start MediaSession listener + local fallback session
+        mediaRepository = MediaControllerRepository(this)
+        mediaRepository.start()
         // --- END MODIFICATION ---
 
         checkAudioPermissions()
@@ -182,6 +198,10 @@ class MainActivity : ComponentActivity() {
             val hvacOn by carPropertyHelper.hvacOnFlow.collectAsState()
             val hvacTemp by carPropertyHelper.hvacTempFlow.collectAsState()
             val drivingRestricted by carPropertyHelper.uxRestrictionsFlow.collectAsState()
+            val nowPlaying by mediaRepository.nowPlaying.collectAsState()
+            var mediaVolume by remember {
+                mutableFloatStateOf(mediaRepository.getMusicVolumeFraction())
+            }
             val activeWarning by safetyWarning
             // --- START MODIFICATION ---
             val copilotUiState by remember {
@@ -225,6 +245,27 @@ class MainActivity : ComponentActivity() {
                     appLanguage = appLanguage.value,
                     displayTheme = displayTheme.value,
                     isDrivingRestricted = effectiveDrivingRestricted,
+                    onLockedInteraction = { notifyDrivingLockedInteraction() },
+                    nowPlaying = nowPlaying,
+                    onMediaPlayPause = { mediaRepository.playPause() },
+                    onMediaSkipNext = { mediaRepository.skipNext() },
+                    onMediaSkipPrevious = { mediaRepository.skipPrevious() },
+                    onMediaOpenSource = { mediaRepository.openSourceApp() },
+                    onMediaSelectLocal = {
+                        mediaRepository.setSourcePreference(MediaSourcePreference.LOCAL)
+                        mediaRepository.play()
+                    },
+                    onMediaSelectYouTube = {
+                        mediaRepository.setSourcePreference(MediaSourcePreference.YOUTUBE_MUSIC)
+                    },
+                    onMediaSelectSoundCloud = {
+                        mediaRepository.setSourcePreference(MediaSourcePreference.SOUNDCLOUD)
+                    },
+                    mediaVolume = mediaVolume,
+                    onMediaVolumeChange = { frac ->
+                        mediaRepository.setMusicVolumeFraction(frac)
+                        mediaVolume = frac
+                    },
                     onHvacToggle = { toggleHvacProperty() },
                     onManualSend = { query -> processUserSpeech(query) },
                     onMicTap = { handleMicTap() },
@@ -266,7 +307,11 @@ class MainActivity : ComponentActivity() {
                     // --- START MODIFICATION ---
                     partialTranscript = partialTranscript.value,
                     micDiagLabel = micDiagStatus.value.label(appLanguage.value),
-                    lastQueryLatencyMs = lastQueryLatencyMs.value
+                    lastQueryLatencyMs = lastQueryLatencyMs.value,
+                    sessionTtlMin = sessionTtlMin.value,
+                    stmTurns = stmTurns.value,
+                    onSessionTtlChange = { ttl -> applySessionTtl(ttl) },
+                    onSessionReset = { resetStmSession(clearChat = true) }
                     // --- END MODIFICATION ---
                 )
 
@@ -506,6 +551,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // MODIFIED: toast always; local TTS cue rate-limited so repeated taps are not noisy
+    private fun notifyDrivingLockedInteraction() {
+        val msg = if (appLanguage.value == AppLanguage.VIETNAMESE) {
+            "Chỉ điều khiển bằng giọng nói khi đang lái."
+        } else {
+            "Voice only while driving."
+        }
+        runOnUiThread {
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastLockedInteractionAtMs >= 3000L) {
+                lastLockedInteractionAtMs = now
+                speakOut(msg, localOnly = true)
+            }
+        }
+    }
+
+    private fun isEffectiveDrivingRestricted(): Boolean {
+        return carPropertyHelper.uxRestrictionsFlow.value &&
+            !(BuildConfig.DEBUG && devSettingsStore.current().effectiveBypassDrivingLock)
+    }
+
     private fun speakOut(text: String, forceEnglish: Boolean = false, localOnly: Boolean = false) {
         stopGoogleListening()
         stopVoskListening()
@@ -653,13 +720,16 @@ class MainActivity : ComponentActivity() {
 
     // --- START MODIFICATION ---
     // Foreground wake: FGS skips FSI heads-up when UI is resumed (onPause, not onStop).
+    // STM: rotate session after idle TTL when returning to UI.
     override fun onResume() {
         super.onResume()
         isUiForeground = true
+        maybeRotateStmAfterIdle()
     }
 
     override fun onPause() {
         isUiForeground = false
+        sessionPausedAtMs = SystemClock.elapsedRealtime()
         super.onPause()
     }
     // --- END MODIFICATION ---
@@ -835,10 +905,12 @@ class MainActivity : ComponentActivity() {
                     try {
                         val requestBody = okhttp3.RequestBody.create("audio/wav".toMediaType(), wavBytes)
                         val part = okhttp3.MultipartBody.Part.createFormData("file", "audio.wav", requestBody)
+                        // MODIFIED: send UI locale to /copilot/stt (was computed then ignored)
                         val lang = if (appLanguage.value == AppLanguage.VIETNAMESE) "vi" else "en"
-                        
+                        val langBody = lang.toRequestBody("text/plain".toMediaType())
+
                         // 1. Get STT instantly and show on UI
-                        val sttResponse = com.wheelchair.cockpit.api.CopilotClient.service.sttOnly(part)
+                        val sttResponse = com.wheelchair.cockpit.api.CopilotClient.service.sttOnly(part, langBody)
                         val transcript = sttResponse.transcript
                         
                         withContext(kotlinx.coroutines.Dispatchers.Main) {
@@ -1007,6 +1079,7 @@ class MainActivity : ComponentActivity() {
 
         // VHAL Speed-sensitive Safety Gate for Mirror Folding
         val currentSpeed = carPropertyHelper.speedFlow.value
+        val drivingLocked = isEffectiveDrivingRestricted()
         val isFoldAction = query.contains("gập", ignoreCase = true) || 
                            query.contains("đóng", ignoreCase = true) || 
                            query.contains("thu", ignoreCase = true) || 
@@ -1018,7 +1091,7 @@ class MainActivity : ComponentActivity() {
                              query.contains("mirror", ignoreCase = true)
         val isMirrorFoldingRequest = isFoldAction && isMirrorTarget
         
-        if (isMirrorFoldingRequest && currentSpeed > 0f) {
+        if (isMirrorFoldingRequest && (drivingLocked || currentSpeed > 0f)) {
             val warningText = if (appLanguage.value == AppLanguage.VIETNAMESE) {
                 "Yêu cầu bị từ chối: Không thể gập gương khi xe đang di chuyển. Vui lòng dừng xe an toàn!"
             } else {
@@ -1110,12 +1183,25 @@ class MainActivity : ComponentActivity() {
             }
         }
         
-        // 2. Door Control
+        // 2. Door Control — blocked while driving lock is on
         if (q.contains("cửa") || q.contains("door")) {
             val unlock = q.contains("mở") || q.contains("unlock") || q.contains("open")
             val lock = q.contains("khóa") || q.contains("đóng") || q.contains("lock") || q.contains("close")
             
             if (unlock || lock) {
+                if (drivingLocked) {
+                    val rejectReply = if (replyIsVietnamese) {
+                        "Không thể điều khiển cửa khi đang lái. Vui lòng dừng xe an toàn."
+                    } else {
+                        "Door controls are locked while driving. Please stop safely first."
+                    }
+                    chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = rejectReply))
+                    citations.value = emptyList()
+                    assistantState.value = AssistantState.IDLE
+                    statusText.value = rejectReply
+                    speakOut(rejectReply, forceEnglish = !replyIsVietnamese)
+                    return
+                }
                 carPropertyHelper.setDoorLock(0, lock)
                 val reply = if (replyIsVietnamese) {
                     if (unlock) "Đã mở khóa cửa xe." else "Đã khóa cửa xe an toàn."
@@ -1141,12 +1227,48 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // 2b. Music mock (quick-action / voice) — mentor demo motion, not deep media
-        if (q.contains("nhạc") || q.contains("music") || q.contains("bài hát") || q.contains("play music")) {
-            val reply = if (replyIsVietnamese) {
-                "Đã bật nhạc (mô phỏng)."
-            } else {
-                "Music started (mock)."
+        // 2b. Music transport via MediaControllerRepository (voice allowed while driving)
+        val mentionsMusic = q.contains("nhạc") || q.contains("music") || q.contains("bài hát") ||
+            q.contains("youtube music") || q.contains("soundcloud") || q.contains("play music") ||
+            q.contains("pause music") || q.contains("next song") || q.contains("previous song") ||
+            q.contains("bài tiếp") || q.contains("bài trước") || q.contains("dừng nhạc")
+        val pauseMusicPhrase = (q.contains("tạm dừng") || q.contains("pause") || q.contains("dừng")) &&
+            (q.contains("nhạc") || q.contains("music") || q.contains("bài"))
+        if (mentionsMusic || pauseMusicPhrase) {
+            val wantPause = pauseMusicPhrase || q.contains("pause music") || q.contains("stop music") ||
+                q.contains("dừng nhạc")
+            val wantNext = q.contains("next") || q.contains("bài tiếp") || q.contains("skip")
+            val wantPrev = q.contains("previous") || q.contains("bài trước") || q.contains("prev")
+            val wantLocal = q.contains("local") || q.contains("nội bộ") || q.contains("trên xe")
+            val wantYt = q.contains("youtube")
+            val wantSc = q.contains("soundcloud")
+
+            when {
+                wantLocal -> mediaRepository.setSourcePreference(MediaSourcePreference.LOCAL)
+                wantYt -> mediaRepository.setSourcePreference(MediaSourcePreference.YOUTUBE_MUSIC)
+                wantSc -> mediaRepository.setSourcePreference(MediaSourcePreference.SOUNDCLOUD)
+            }
+
+            val reply = when {
+                wantPause -> {
+                    mediaRepository.pause()
+                    if (replyIsVietnamese) "Đã tạm dừng nhạc." else "Music paused."
+                }
+                wantNext -> {
+                    mediaRepository.skipNext()
+                    if (replyIsVietnamese) "Chuyển bài tiếp theo." else "Skipping to next track."
+                }
+                wantPrev -> {
+                    mediaRepository.skipPrevious()
+                    if (replyIsVietnamese) "Quay lại bài trước." else "Going to previous track."
+                }
+                else -> {
+                    if (wantLocal || (!wantYt && !wantSc)) {
+                        mediaRepository.setSourcePreference(MediaSourcePreference.LOCAL)
+                    }
+                    mediaRepository.play()
+                    if (replyIsVietnamese) "Đã bật nhạc." else "Music playing."
+                }
             }
             chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = reply))
             citations.value = emptyList()
@@ -1157,20 +1279,33 @@ class MainActivity : ComponentActivity() {
                     kind = MockActuationKind.MUSIC,
                     titleVi = "Âm nhạc",
                     titleEn = "Music",
-                    subtitleVi = "Mô phỏng phát nhạc",
-                    subtitleEn = "Mock music playback started"
+                    subtitleVi = reply,
+                    subtitleEn = reply
                 )
             )
             speakOut(reply, forceEnglish = !replyIsVietnamese)
             return
         }
         
-        // 3. Mirror Control
+        // 3. Mirror Control — blocked while driving lock is on
         if (q.contains("gương") || q.contains("mirror")) {
             val unfold = q.contains("mở") || q.contains("unfold") || q.contains("open")
             val fold = q.contains("gập") || q.contains("đóng") || q.contains("fold") || q.contains("close")
             
             if (unfold || fold) {
+                if (drivingLocked) {
+                    val rejectReply = if (replyIsVietnamese) {
+                        "Không thể điều khiển gương khi đang lái. Vui lòng dừng xe an toàn."
+                    } else {
+                        "Mirror controls are locked while driving. Please stop safely first."
+                    }
+                    chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = rejectReply))
+                    citations.value = emptyList()
+                    assistantState.value = AssistantState.IDLE
+                    statusText.value = rejectReply
+                    speakOut(rejectReply, forceEnglish = !replyIsVietnamese)
+                    return
+                }
                 carPropertyHelper.setMirrorFold(0, fold)
                 val reply = if (replyIsVietnamese) {
                     if (unfold) "Đã mở gương chiếu hậu." else "Đã gập gương chiếu hậu."
@@ -1198,9 +1333,16 @@ class MainActivity : ComponentActivity() {
             val started = SystemClock.elapsedRealtime()
             try {
                 val langCode = if (replyIsVietnamese) "vi" else "en"
-                val response = copilotRepository.sendQuery(query, language = langCode)
+                val response = copilotRepository.sendQuery(
+                    query,
+                    language = langCode,
+                    sessionId = sessionId,
+                    sessionTtlMin = sessionTtlMin.value
+                )
                 val elapsed = SystemClock.elapsedRealtime() - started
                 runOnUiThread {
+                    response.session_id?.let { sessionId = it }
+                    stmTurns.value = response.stm_turns ?: stmTurns.value
                     val dev = devSettingsStore.current().developerModeEnabled
                     if (dev) {
                         lastQueryLatencyMs.value = elapsed
@@ -1270,6 +1412,38 @@ class MainActivity : ComponentActivity() {
     }
 
     // --- START MODIFICATION ---
+    private fun applySessionTtl(ttl: Int) {
+        val normalized = when (ttl) {
+            0, 3, 5, 10 -> ttl
+            else -> 5
+        }
+        sessionTtlMin.value = normalized
+        if (normalized == 0) {
+            resetStmSession(clearChat = false)
+        }
+    }
+
+    private fun resetStmSession(clearChat: Boolean) {
+        sessionId = java.util.UUID.randomUUID().toString()
+        stmTurns.value = 0
+        sessionPausedAtMs = 0L
+        if (clearChat) {
+            chatHistory.clear()
+            citations.value = emptyList()
+        }
+        Log.i("CockpitUI", "STM session reset clearChat=$clearChat ttl=${sessionTtlMin.value}")
+    }
+
+    private fun maybeRotateStmAfterIdle() {
+        val ttl = sessionTtlMin.value
+        if (ttl <= 0 || sessionPausedAtMs <= 0L) return
+        val idleMs = SystemClock.elapsedRealtime() - sessionPausedAtMs
+        if (idleMs > ttl * 60_000L) {
+            resetStmSession(clearChat = true)
+        }
+        sessionPausedAtMs = 0L
+    }
+
     private fun runHealthCheck() {
         healthChecking.value = true
         CoroutineScope(Dispatchers.IO).launch {
@@ -1323,6 +1497,9 @@ class MainActivity : ComponentActivity() {
         tts?.stop()
         tts?.shutdown()
         carPropertyHelper.shutdown()
+        if (::mediaRepository.isInitialized) {
+            mediaRepository.stop()
+        }
     }
 
     // --- START MODIFICATION ---

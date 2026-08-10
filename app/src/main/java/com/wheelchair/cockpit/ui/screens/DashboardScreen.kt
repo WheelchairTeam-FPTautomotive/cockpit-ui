@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.wheelchair.cockpit.media.NowPlaying
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.DisplayTheme
 import com.wheelchair.cockpit.ui.components.StatusCard
@@ -47,6 +48,14 @@ fun DashboardScreen(
     onTempDown: () -> Unit,
     appLanguage: AppLanguage,
     displayTheme: DisplayTheme,
+    // MODIFIED: disable HVAC / door taps while driving lock is on
+    isDrivingRestricted: Boolean = false,
+    onLockedInteraction: () -> Unit = {},
+    nowPlaying: NowPlaying = NowPlaying(),
+    onMediaPlayPause: () -> Unit = {},
+    onMediaSkipNext: () -> Unit = {},
+    onMediaSkipPrevious: () -> Unit = {},
+    onMediaOpenSource: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val backgroundBg = CockpitColors.getBackgroundBg(displayTheme)
@@ -96,10 +105,22 @@ fun DashboardScreen(
                     outlineVariant = outlineVariant,
                     accentGreen = accentGreen,
                     theme = displayTheme,
-                    onFrontLeftToggle = { doorStates = doorStates.copy(frontLeft = !doorStates.frontLeft) },
-                    onFrontRightToggle = { doorStates = doorStates.copy(frontRight = !doorStates.frontRight) },
-                    onRearLeftToggle = { doorStates = doorStates.copy(rearLeft = !doorStates.rearLeft) },
-                    onRearRightToggle = { doorStates = doorStates.copy(rearRight = !doorStates.rearRight) },
+                    onFrontLeftToggle = {
+                        if (isDrivingRestricted) onLockedInteraction()
+                        else doorStates = doorStates.copy(frontLeft = !doorStates.frontLeft)
+                    },
+                    onFrontRightToggle = {
+                        if (isDrivingRestricted) onLockedInteraction()
+                        else doorStates = doorStates.copy(frontRight = !doorStates.frontRight)
+                    },
+                    onRearLeftToggle = {
+                        if (isDrivingRestricted) onLockedInteraction()
+                        else doorStates = doorStates.copy(rearLeft = !doorStates.rearLeft)
+                    },
+                    onRearRightToggle = {
+                        if (isDrivingRestricted) onLockedInteraction()
+                        else doorStates = doorStates.copy(rearRight = !doorStates.rearRight)
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -128,6 +149,13 @@ fun DashboardScreen(
                     outlineVariant = outlineVariant,
                     theme = displayTheme,
                     appLanguage = appLanguage,
+                    nowPlaying = nowPlaying,
+                    onPlayPause = onMediaPlayPause,
+                    onSkipNext = onMediaSkipNext,
+                    onSkipPrevious = onMediaSkipPrevious,
+                    onOpenSource = onMediaOpenSource,
+                    isDrivingRestricted = isDrivingRestricted,
+                    onLockedInteraction = onLockedInteraction,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 )
                 
@@ -144,6 +172,8 @@ fun DashboardScreen(
                     textSecondary = textSecondary,
                     outlineVariant = outlineVariant,
                     theme = displayTheme,
+                    isDrivingRestricted = isDrivingRestricted,
+                    onLockedInteraction = onLockedInteraction,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

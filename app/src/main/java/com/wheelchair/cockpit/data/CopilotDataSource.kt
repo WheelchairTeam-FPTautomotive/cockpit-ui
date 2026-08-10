@@ -5,7 +5,12 @@ import com.wheelchair.cockpit.api.QueryResponse
 
 // --- START MODIFICATION ---
 interface CopilotDataSource {
-    suspend fun query(query: String, language: String = "vi"): QueryResponse
+    suspend fun query(
+        query: String,
+        language: String = "vi",
+        sessionId: String? = null,
+        sessionTtlMin: Int? = 5
+    ): QueryResponse
     suspend fun checkHealth(): HealthResult
 }
 
@@ -16,7 +21,12 @@ data class HealthResult(
 )
 
 class MockCopilotDataSource : CopilotDataSource {
-    override suspend fun query(query: String, language: String): QueryResponse {
+    override suspend fun query(
+        query: String,
+        language: String,
+        sessionId: String?,
+        sessionTtlMin: Int?
+    ): QueryResponse {
         val answer = if (language == "en") {
             "Based on the technical manual (MOCK):\n" +
                 "1. HVAC is controlled from the center console and voice when Parked.\n" +
@@ -46,7 +56,9 @@ class MockCopilotDataSource : CopilotDataSource {
                     matched_text = "Hạn chế thao tác phức tạp khi tốc độ > 80 km/h."
                 )
             ),
-            status = "success"
+            status = "success",
+            session_id = sessionId,
+            stm_turns = 0
         )
     }
 

@@ -35,9 +35,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -82,6 +84,9 @@ fun MapScreen(
     textMain: Color,
     textSecondary: Color,
     outlineVariant: Color,
+    // MODIFIED: glance map; disable control taps while driving
+    isDrivingRestricted: Boolean = false,
+    onLockedInteraction: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = mapPalette(displayTheme)
@@ -91,6 +96,7 @@ fun MapScreen(
             .fillMaxSize()
             .padding(start = 24.dp)
             .background(palette.background)
+            .then(if (isDrivingRestricted) Modifier.alpha(0.85f) else Modifier)
     ) {
         // Map canvas is clipped to this Box so it cannot draw under the sidebar.
         MapLayer(displayTheme, palette)
@@ -100,7 +106,9 @@ fun MapScreen(
             displayTheme = displayTheme,
             primaryColor = primaryColor,
             textMain = textMain,
-            textSecondary = textSecondary
+            textSecondary = textSecondary,
+            isDrivingRestricted = isDrivingRestricted,
+            onLockedInteraction = onLockedInteraction
         )
     }
 }
@@ -581,7 +589,9 @@ private fun MapOverlays(
     displayTheme: DisplayTheme,
     primaryColor: Color,
     textMain: Color,
-    textSecondary: Color
+    textSecondary: Color,
+    isDrivingRestricted: Boolean,
+    onLockedInteraction: () -> Unit
 ) {
     val vi = appLanguage == AppLanguage.VIETNAMESE
 
@@ -607,7 +617,9 @@ private fun MapOverlays(
                 hint = if (vi) "Tìm kiếm điểm đến..." else "Search destination...",
                 textMain = textMain,
                 textSecondary = textSecondary,
-                theme = displayTheme
+                theme = displayTheme,
+                isDrivingRestricted = isDrivingRestricted,
+                onLockedInteraction = onLockedInteraction
             )
         }
 
@@ -620,7 +632,9 @@ private fun MapOverlays(
         ) {
             MapControls(
                 textMain = textMain,
-                theme = displayTheme
+                theme = displayTheme,
+                isDrivingRestricted = isDrivingRestricted,
+                onLockedInteraction = onLockedInteraction
             )
         }
     }
@@ -684,7 +698,9 @@ private fun SearchBar(
     hint: String,
     textMain: Color,
     textSecondary: Color,
-    theme: DisplayTheme
+    theme: DisplayTheme,
+    isDrivingRestricted: Boolean = false,
+    onLockedInteraction: () -> Unit = {}
 ) {
     MapOverlaySurface(
         theme = theme,
@@ -693,6 +709,7 @@ private fun SearchBar(
         Row(
             modifier = Modifier
                 .width(260.dp)
+                .clickable(enabled = isDrivingRestricted, onClick = onLockedInteraction)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -716,7 +733,9 @@ private fun SearchBar(
 @Composable
 private fun MapControls(
     textMain: Color,
-    theme: DisplayTheme
+    theme: DisplayTheme,
+    isDrivingRestricted: Boolean = false,
+    onLockedInteraction: () -> Unit = {}
 ) {
     Column(
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -726,28 +745,32 @@ private fun MapControls(
             icon = Icons.Rounded.NearMe,
             contentDescription = "Recenter",
             textMain = textMain,
-            theme = theme
+            theme = theme,
+            onClick = { if (isDrivingRestricted) onLockedInteraction() }
         )
         Column {
             MapControlButton(
                 icon = Icons.Rounded.Add,
                 contentDescription = "Zoom in",
                 textMain = textMain,
-                theme = theme
+                theme = theme,
+                onClick = { if (isDrivingRestricted) onLockedInteraction() }
             )
             Spacer(modifier = Modifier.height(6.dp))
             MapControlButton(
                 icon = Icons.Rounded.Remove,
                 contentDescription = "Zoom out",
                 textMain = textMain,
-                theme = theme
+                theme = theme,
+                onClick = { if (isDrivingRestricted) onLockedInteraction() }
             )
         }
         MapControlButton(
             icon = Icons.Rounded.MyLocation,
             contentDescription = "Locate",
             textMain = textMain,
-            theme = theme
+            theme = theme,
+            onClick = { if (isDrivingRestricted) onLockedInteraction() }
         )
     }
 }
@@ -757,14 +780,15 @@ private fun MapControlButton(
     icon: ImageVector,
     contentDescription: String,
     textMain: Color,
-    theme: DisplayTheme
+    theme: DisplayTheme,
+    onClick: () -> Unit = {}
 ) {
     MapOverlaySurface(
         theme = theme,
         shape = CircleShape,
         modifier = Modifier.size(48.dp)
     ) {
-        IconButton(onClick = { }) {
+        IconButton(onClick = onClick) {
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,

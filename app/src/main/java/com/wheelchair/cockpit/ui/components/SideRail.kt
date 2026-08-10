@@ -49,6 +49,9 @@ fun SideRail(
     onScreenSelected: (Screen) -> Unit,
     theme: DisplayTheme,
     appLanguage: AppLanguage,
+    // MODIFIED: block Settings while driving lock is active
+    isDrivingRestricted: Boolean = false,
+    onLockedInteraction: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val vi = appLanguage == AppLanguage.VIETNAMESE
@@ -131,11 +134,15 @@ fun SideRail(
             label = if (vi) "Cài đặt" else "Settings",
             icon = Icons.Rounded.Settings,
             selected = selectedScreen == Screen.SETTINGS,
-            primaryColor = primary,
-            textSecondary = textSecondary,
+            primaryColor = if (isDrivingRestricted) primary.copy(alpha = 0.35f) else primary,
+            textSecondary = if (isDrivingRestricted) textSecondary.copy(alpha = 0.4f) else textSecondary,
             surfaceColor = surface,
             outlineColor = outline,
-            onClick = { onScreenSelected(Screen.SETTINGS) }
+            onClick = {
+                // MODIFIED: Settings blocked while driving; Map/Media stay glanceable
+                if (isDrivingRestricted) onLockedInteraction()
+                else onScreenSelected(Screen.SETTINGS)
+            }
         )
     }
 }

@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -29,15 +28,25 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wheelchair.cockpit.model.AppLanguage
+import com.wheelchair.cockpit.model.AssistantState
 import com.wheelchair.cockpit.ui.components.ChatMessage
+import com.wheelchair.cockpit.ui.components.CitationCard
+import com.wheelchair.cockpit.ui.components.ManualInputBar
+import com.wheelchair.cockpit.ui.components.formatTimingLine
+import com.wheelchair.cockpit.ui.components.parseMarkdownToAnnotatedString
 import com.wheelchair.cockpit.ui.theme.CockpitTypography
 
 @Composable
@@ -49,10 +58,19 @@ fun AssistantScreen(
     primaryBlue: Color,
     surfaceColor: Color,
     onMicTap: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // MODIFIED: restore citation cards + LM Studio-style timing footer
+    showCitationCards: Boolean = true,
+    showLatency: Boolean = false,
+    outlineVariant: Color = textSecondary.copy(alpha = 0.35f),
+    // MODIFIED: restore text chat bar next to voice mic
+    assistantState: AssistantState = AssistantState.IDLE,
+    isDrivingRestricted: Boolean = false,
+    onManualSend: (String) -> Unit = {},
 ) {
     val vi = appLanguage == AppLanguage.VIETNAMESE
     val listState = rememberLazyListState()
+    var queryInput by remember { mutableStateOf("") }
 
     // Welcome message shown when no history yet
     val welcomeMessage = ChatMessage(
@@ -91,28 +109,57 @@ fun AssistantScreen(
                     surfaceColor = surfaceColor,
                     textMain = textMain,
                     textSecondary = textSecondary,
+                    outlineVariant = outlineVariant,
+                    showCitationCards = showCitationCards,
+                    showLatency = showLatency,
                     vi = vi
                 )
             }
         }
 
-        // Mic FAB pinned to bottom-right
-        FloatingActionButton(
-            onClick = onMicTap,
+        // --- START MODIFICATION ---
+        // Text field + send + mic (restored; overhaul left mic-only FAB)
+        Row(
             modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(20.dp),
-            shape = CircleShape,
-            containerColor = primaryBlue,
-            contentColor = Color.White,
-            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp)
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(
-                imageVector = Icons.Rounded.Mic,
-                contentDescription = if (vi) "Nói" else "Speak",
-                modifier = Modifier.size(26.dp)
+            ManualInputBar(
+                queryInput = queryInput,
+                assistantState = assistantState,
+                appLanguage = appLanguage,
+                primaryBlue = primaryBlue,
+                surfaceContainer = surfaceColor,
+                textMain = textMain,
+                textSecondary = textSecondary,
+                outlineVariant = outlineVariant,
+                isDrivingRestricted = isDrivingRestricted,
+                onQueryInputChange = { queryInput = it },
+                onManualSend = { text ->
+                    onManualSend(text)
+                    queryInput = ""
+                },
+                modifier = Modifier.weight(1f)
             )
+            FloatingActionButton(
+                onClick = onMicTap,
+                shape = CircleShape,
+                containerColor = primaryBlue,
+                contentColor = Color.White,
+                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
+                modifier = Modifier.size(52.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Mic,
+                    contentDescription = if (vi) "Nói" else "Speak",
+                    modifier = Modifier.size(26.dp)
+                )
+            }
         }
+        // --- END MODIFICATION ---
     }
 }
 
@@ -124,6 +171,9 @@ private fun ChatBubble(
     surfaceColor: Color,
     textMain: Color,
     textSecondary: Color,
+    outlineVariant: Color,
+    showCitationCards: Boolean,
+    showLatency: Boolean,
     vi: Boolean
 ) {
     val isUser = message.isUser
@@ -133,7 +183,6 @@ private fun ChatBubble(
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Bottom
     ) {
-        // Avatar for assistant messages
         if (!isUser) {
             Box(
                 modifier = Modifier
@@ -154,9 +203,8 @@ private fun ChatBubble(
 
         Column(
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-            modifier = Modifier.widthIn(max = 480.dp)
+            modifier = Modifier.widthIn(max = 520.dp)
         ) {
-            // Sender label
             Text(
                 text = if (isUser) { if (vi) "Bạn" else "You" } else "Copilot",
                 style = CockpitTypography.caption.copy(fontSize = 10.sp),
@@ -164,7 +212,6 @@ private fun ChatBubble(
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
             )
 
-            // Bubble
             Surface(
                 shape = RoundedCornerShape(
                     topStart = 16.dp,
@@ -176,19 +223,50 @@ private fun ChatBubble(
                 tonalElevation = if (isUser) 0.dp else 2.dp,
                 shadowElevation = if (isUser) 0.dp else 4.dp
             ) {
-                Text(
-                    text = message.text,
-                    style = CockpitTypography.body,
-                    color = textMain,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                )
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    if (isUser) {
+                        Text(
+                            text = message.text,
+                            style = CockpitTypography.body,
+                            color = textMain
+                        )
+                    } else {
+                        Text(
+                            text = parseMarkdownToAnnotatedString(message.text, primaryBlue),
+                            style = CockpitTypography.body,
+                            color = textMain
+                        )
+                        // --- START MODIFICATION ---
+                        if (showCitationCards && message.citations.isNotEmpty()) {
+                            Spacer(modifier = Modifier.size(8.dp))
+                            message.citations.take(3).forEach { citation ->
+                                CitationCard(
+                                    citation = citation,
+                                    primaryColor = primaryBlue,
+                                    textColor = textMain,
+                                    surfaceColor = surfaceColor,
+                                    borderColor = outlineVariant
+                                )
+                            }
+                        }
+                        if (showLatency && message.timing != null) {
+                            Spacer(modifier = Modifier.size(8.dp))
+                            Text(
+                                text = formatTimingLine(message.timing),
+                                fontSize = 10.sp,
+                                color = textSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        // --- END MODIFICATION ---
+                    }
+                }
             }
         }
 
-        // Spacer after user bubble (right side)
         if (isUser) {
             Spacer(modifier = Modifier.size(8.dp))
-            // User avatar
             Box(
                 modifier = Modifier
                     .size(32.dp)
