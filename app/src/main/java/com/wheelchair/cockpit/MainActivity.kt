@@ -970,10 +970,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         
-        if (!response.audio_base64.isNullOrEmpty()) {
+        // FIX: Check if the actual answer text contains Vietnamese diacritics.
+        val answerHasViDiacritics = Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(response.answer)
+        
+        if (!response.audio_base64.isNullOrEmpty() && answerHasViDiacritics == vi) {
             playBase64Audio(response.audio_base64, response.answer)
         } else {
-            speakOut(response.answer)
+            speakOut(response.answer, forceEnglish = !answerHasViDiacritics)
         }
     }
 
@@ -1091,7 +1094,7 @@ class MainActivity : ComponentActivity() {
         
         // Auto-detect query language for dynamic response
         val isQueryVietnamese = Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(query)
-        val isQueryEnglish = Regex("\\b(turn|on|off|open|close|fold|unfold|door|mirror|ac|hvac|air|condition|how|what|why|is|the|a|to|can|you)\\b", RegexOption.IGNORE_CASE).containsMatchIn(query)
+        val isQueryEnglish = Regex("\\b(turn|on|off|open|close|fold|unfold|door|mirror|ac|hvac|air|condition|how|what|why|who|where|when|is|are|am|was|were|the|a|an|to|can|you|i|he|she|it|they|we|hello|hi|please|set|make|do|does|did|will|would|could|should|can|test|car|system|music|play|stop|volume|temp|temperature)\\b", RegexOption.IGNORE_CASE).containsMatchIn(query)
         val replyIsVietnamese = if (isQueryVietnamese) true else if (isQueryEnglish) false else appLanguage.value == AppLanguage.VIETNAMESE
         
         // --- LOCAL VHAL INTENT PARSING ---
@@ -1278,10 +1281,16 @@ class MainActivity : ComponentActivity() {
                                 showMockActuation(mockActuationForRagSuccess(vi))
                             }
                         }
-                    if (response.audio_base64 != null) {
+                    // FIX: Check if the actual answer text contains Vietnamese diacritics.
+                    // If the user asked in Vietnamese ("HVAC là gì") but the LLM replied in English (no diacritics),
+                    // the backend's pre-generated audio will incorrectly use the Vietnamese voice to read English text.
+                    val answerHasViDiacritics = Regex("[áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]", RegexOption.IGNORE_CASE).containsMatchIn(response.answer)
+                    
+                    if (response.audio_base64 != null && answerHasViDiacritics == vi) {
                         playBase64Audio(response.audio_base64, response.answer)
                     } else {
-                        speakOut(response.answer, forceEnglish = !replyIsVietnamese)
+                        // Discard the backend's audio (it used the wrong voice) and request a new one with the correct language.
+                        speakOut(response.answer, forceEnglish = !answerHasViDiacritics)
                     }
                 }
             } catch (e: Exception) {

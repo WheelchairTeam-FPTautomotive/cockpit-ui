@@ -225,7 +225,9 @@ private fun ChatBubble(
 
         Column(
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-            modifier = Modifier.widthIn(max = 480.dp)
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .widthIn(max = 480.dp)
         ) {
             // Sender label
             Text(
