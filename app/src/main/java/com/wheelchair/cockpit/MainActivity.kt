@@ -6,6 +6,9 @@ import android.car.VehiclePropertyIds
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -76,6 +79,8 @@ class MainActivity : ComponentActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var restartListeningRunnable: Runnable? = null
     private var backendMediaPlayer: android.media.MediaPlayer? = null
+    // MODIFIED: AAOS needs explicit speech usage + focus or Edge MP3 plays silently
+    private var ttsAudioFocusRequest: AudioFocusRequest? = null
 
     private var assistantState = mutableStateOf(AssistantState.IDLE)
     private var statusText = mutableStateOf("System Standby. Say \"Hey Car\" to activate.")
@@ -232,14 +237,12 @@ class MainActivity : ComponentActivity() {
                     healthResult = healthResult.value,
                     healthChecking = healthChecking.value,
                     onDeveloperModeChange = { enabled ->
-                        CoroutineScope(Dispatchers.IO).launch {
-                            devSettingsStore.setDeveloperModeEnabled(enabled)
-                        }
+                        // MODIFIED: sync flag so effectiveBaseUrl switches immediately
+                        devSettingsStore.applyDeveloperModeNow(enabled)
                     },
                     onBaseUrlApply = { url ->
-                        CoroutineScope(Dispatchers.IO).launch {
-                            devSettingsStore.setBaseUrl(url)
-                        }
+                        // MODIFIED: sync snapshot before next OkHttp call (no race with health/query)
+                        devSettingsStore.applyBaseUrlNow(url)
                     },
                     onMockRagChange = { enabled ->
                         CoroutineScope(Dispatchers.IO).launch {
@@ -255,6 +258,9 @@ class MainActivity : ComponentActivity() {
                         CoroutineScope(Dispatchers.IO).launch {
                             devSettingsStore.setHttpLogLevel(level)
                         }
+                    },
+                    onShowCitationCardsChange = { enabled ->
+                        devSettingsStore.applyShowCitationCardsNow(enabled)
                     },
                     onHealthCheck = { runHealthCheck() },
                     // --- START MODIFICATION ---
@@ -427,27 +433,59 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun abandonTtsAudioFocus() {
+        val am = getSystemService(AUDIO_SERVICE) as? AudioManager ?: return
+        ttsAudioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+        ttsAudioFocusRequest = null
+    }
+
     private fun playBase64Audio(base64Audio: String, fallbackText: String) {
         try {
             stopGoogleListening()
             stopVoskListening()
             tts?.stop()
             assistantState.value = AssistantState.SPEAKING
-            
+
             if (base64Audio.isEmpty()) {
                 speakOut(fallbackText, localOnly = true)
                 return
             }
-            
+
             val audioBytes = android.util.Base64.decode(base64Audio, android.util.Base64.DEFAULT)
-            val tempFile = java.io.File(cacheDir, "response_audio.wav")
+            // MODIFIED: Edge/VieNeu return MP3 (was wrongly named .wav)
+            val tempFile = java.io.File(cacheDir, "response_audio.mp3")
             java.io.FileOutputStream(tempFile).use { it.write(audioBytes) }
-            
+
+            val am = getSystemService(AUDIO_SERVICE) as AudioManager
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            abandonTtsAudioFocus()
+            val focusReq = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener { }
+                .build()
+            ttsAudioFocusRequest = focusReq
+            val focusResult = am.requestAudioFocus(focusReq)
+            Log.i(
+                "CockpitUI",
+                "Backend TTS play bytes=${audioBytes.size} focus=$focusResult magic=${audioBytes.take(3).joinToString("") { "%02x".format(it) }}"
+            )
+
             backendMediaPlayer?.release()
             backendMediaPlayer = android.media.MediaPlayer().apply {
+                setAudioAttributes(attrs)
                 setDataSource(tempFile.absolutePath)
-                prepare()
+                setVolume(1f, 1f)
+                setOnErrorListener { _, what, extra ->
+                    Log.e("CockpitUI", "MediaPlayer error what=$what extra=$extra")
+                    abandonTtsAudioFocus()
+                    runOnUiThread { speakOut(fallbackText, localOnly = true) }
+                    true
+                }
                 setOnCompletionListener {
+                    abandonTtsAudioFocus()
                     runOnUiThread {
                         assistantState.value = AssistantState.IDLE
                         statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) {
@@ -458,10 +496,12 @@ class MainActivity : ComponentActivity() {
                         startVoskListening()
                     }
                 }
+                prepare()
                 start()
             }
         } catch (e: Exception) {
             Log.e("CockpitUI", "Error playing base64 audio", e)
+            abandonTtsAudioFocus()
             speakOut(fallbackText, localOnly = true) // Fallback to local TTS
         }
     }
@@ -1255,6 +1295,7 @@ class MainActivity : ComponentActivity() {
                 } catch (e: Exception) {
                     Log.e("CockpitUI", "Error stopping backend player", e)
                 }
+                abandonTtsAudioFocus()
                 assistantState.value = AssistantState.IDLE
                 statusText.value = if (appLanguage.value == AppLanguage.VIETNAMESE) "Đã dừng trợ lý." else "Assistant stopped."
                 startVoskListening()
@@ -1292,5 +1333,3 @@ class MainActivity : ComponentActivity() {
     }
     // --- END MODIFICATION ---
 }
-
-

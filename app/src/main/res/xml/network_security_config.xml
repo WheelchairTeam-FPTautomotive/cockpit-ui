@@ -1,9 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Allow cleartext (HTTP) traffic to the emulator host loopback and local network -->
+    <!--
+      Cleartext HTTP allowlist for Dev Settings backend URL.
+      Carsky trout: use http://127.0.0.1:8000/ via adb reverse (+ SSH -L for EC2).
+      Direct EIP from Carsky fails (no guest egress) — keep EIP here only for
+      laptop-side / alternate clients. Rebuild APK after editing domains.
+      See KMS-AI-Agent-for-Automotive-Documentation/README-carsky.md
+      and carsky-backend-tunnel.ps1.
+    -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">10.0.2.2</domain>
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">52.64.18.95</domain>
     </domain-config>
 </network-security-config>

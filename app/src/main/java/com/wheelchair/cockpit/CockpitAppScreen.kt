@@ -78,6 +78,7 @@ fun CockpitAppScreen(
     onMockRagChange: (Boolean) -> Unit = {},
     onBypassDrivingChange: (Boolean) -> Unit = {},
     onHttpLogLevelChange: (HttpLogLevel) -> Unit = {},
+    onShowCitationCardsChange: (Boolean) -> Unit = {},
     onHealthCheck: () -> Unit = {},
     partialTranscript: String = "",
     micDiagLabel: String = "",
@@ -182,6 +183,7 @@ fun CockpitAppScreen(
                                 onMockRagChange = onMockRagChange,
                                 onBypassDrivingChange = onBypassDrivingChange,
                                 onHttpLogLevelChange = onHttpLogLevelChange,
+                                onShowCitationCardsChange = onShowCitationCardsChange,
                                 onHealthCheck = onHealthCheck,
                                 appVersionName = BuildConfig.VERSION_NAME,
                                 lastQueryLatencyMs = lastQueryLatencyMs

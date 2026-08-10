@@ -3,16 +3,22 @@ package com.wheelchair.cockpit.dev
 import okhttp3.logging.HttpLoggingInterceptor
 
 // --- START MODIFICATION ---
-// Developer-mode preference model. Overrides apply only when developerModeEnabled is true.
+// Developer-mode preference model.
+// Debug toggles (citations, mock RAG, bypass) require developerModeEnabled.
+// Backend baseUrl always applies once set — turning developer mode off must not
+// silently revert to DEFAULT_BASE_URL (was causing 10.0.2.2 mismatch).
 data class DevSettings(
     val developerModeEnabled: Boolean = false,
     val baseUrl: String = DEFAULT_BASE_URL,
     val mockRagEnabled: Boolean = false,
     val bypassDrivingLock: Boolean = false,
-    val httpLogLevel: HttpLogLevel = HttpLogLevel.BODY
+    val httpLogLevel: HttpLogLevel = HttpLogLevel.BODY,
+    // MODIFIED: citation cards gated separately under developer mode
+    val showCitationCards: Boolean = true,
 ) {
+    // MODIFIED: persist applied host for all requests (on or off developer mode)
     val effectiveBaseUrl: String
-        get() = if (developerModeEnabled) normalizeBaseUrl(baseUrl) else DEFAULT_BASE_URL
+        get() = normalizeBaseUrl(baseUrl)
 
     val effectiveMockRag: Boolean
         get() = developerModeEnabled && mockRagEnabled
@@ -22,6 +28,9 @@ data class DevSettings(
 
     val effectiveHttpLogLevel: HttpLogLevel
         get() = if (developerModeEnabled) httpLogLevel else HttpLogLevel.BODY
+
+    val effectiveShowCitationCards: Boolean
+        get() = developerModeEnabled && showCitationCards
 
     companion object {
         const val DEFAULT_BASE_URL = "http://10.0.2.2:8000/"

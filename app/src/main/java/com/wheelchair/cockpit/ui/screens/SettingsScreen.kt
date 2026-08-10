@@ -55,6 +55,7 @@ fun SettingsScreen(
     onMockRagChange: (Boolean) -> Unit = {},
     onBypassDrivingChange: (Boolean) -> Unit = {},
     onHttpLogLevelChange: (HttpLogLevel) -> Unit = {},
+    onShowCitationCardsChange: (Boolean) -> Unit = {},
     onHealthCheck: () -> Unit = {},
     appVersionName: String = "",
     lastQueryLatencyMs: Long? = null
@@ -153,6 +154,7 @@ fun SettingsScreen(
                 onMockRagChange = onMockRagChange,
                 onBypassDrivingChange = onBypassDrivingChange,
                 onHttpLogLevelChange = onHttpLogLevelChange,
+                onShowCitationCardsChange = onShowCitationCardsChange,
                 onHealthCheck = onHealthCheck,
                 appVersionName = appVersionName,
                 lastQueryLatencyMs = lastQueryLatencyMs

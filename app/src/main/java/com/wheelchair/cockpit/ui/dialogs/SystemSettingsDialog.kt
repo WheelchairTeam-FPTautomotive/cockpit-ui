@@ -52,6 +52,7 @@ fun SystemSettingsDialog(
     onMockRagChange: (Boolean) -> Unit = {},
     onBypassDrivingChange: (Boolean) -> Unit = {},
     onHttpLogLevelChange: (HttpLogLevel) -> Unit = {},
+    onShowCitationCardsChange: (Boolean) -> Unit = {},
     onHealthCheck: () -> Unit = {},
     appVersionName: String = BuildConfig.VERSION_NAME,
     // --- START MODIFICATION ---
@@ -170,6 +171,7 @@ fun SystemSettingsDialog(
                         onMockRagChange = onMockRagChange,
                         onBypassDrivingChange = onBypassDrivingChange,
                         onHttpLogLevelChange = onHttpLogLevelChange,
+                        onShowCitationCardsChange = onShowCitationCardsChange,
                         onHealthCheck = onHealthCheck,
                         appVersionName = appVersionName,
                         lastQueryLatencyMs = lastQueryLatencyMs
@@ -206,12 +208,17 @@ internal fun DeveloperModeSection(
     onMockRagChange: (Boolean) -> Unit,
     onBypassDrivingChange: (Boolean) -> Unit,
     onHttpLogLevelChange: (HttpLogLevel) -> Unit,
+    onShowCitationCardsChange: (Boolean) -> Unit,
     onHealthCheck: () -> Unit,
     appVersionName: String,
     lastQueryLatencyMs: Long? = null
 ) {
     var urlDraft by remember(devSettings.baseUrl) { mutableStateOf(devSettings.baseUrl) }
     val vi = appLanguage == AppLanguage.VIETNAMESE
+
+    fun applyUrlDraft() {
+        onBaseUrlApply(urlDraft)
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -231,7 +238,11 @@ internal fun DeveloperModeSection(
             )
             Switch(
                 checked = devSettings.developerModeEnabled,
-                onCheckedChange = onDeveloperModeChange,
+                onCheckedChange = { enabled ->
+                    // MODIFIED: persist draft URL when enabling so host override is ready
+                    if (enabled) applyUrlDraft()
+                    onDeveloperModeChange(enabled)
+                },
                 colors = SwitchDefaults.colors(checkedTrackColor = primaryBlue)
             )
         }
@@ -253,18 +264,32 @@ internal fun DeveloperModeSection(
             value = urlDraft,
             onValueChange = { urlDraft = it },
             label = { Text(if (vi) "Backend base URL" else "Backend base URL") },
+            supportingText = {
+                Text(
+                    if (vi) {
+                        "URL đã Apply dùng cả khi tắt Dev mode. Emulator→PC: http://10.0.2.2:8000/"
+                    } else {
+                        "Applied URL is used even with Dev mode off. Emulator→PC: http://10.0.2.2:8000/"
+                    },
+                    fontSize = 11.sp
+                )
+            },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = { onBaseUrlApply(urlDraft) },
+                onClick = { applyUrlDraft() },
                 colors = ButtonDefaults.buttonColors(containerColor = primaryBlue)
             ) {
                 Text(if (vi) "Áp dụng" else "Apply")
             }
             OutlinedButton(
-                onClick = onHealthCheck,
+                onClick = {
+                    // MODIFIED: always apply draft before health so URL matches field
+                    applyUrlDraft()
+                    onHealthCheck()
+                },
                 enabled = !healthChecking
             ) {
                 Text(
@@ -285,6 +310,22 @@ internal fun DeveloperModeSection(
             )
         }
 
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (vi) "Hiện citation card" else "Show citation cards",
+                modifier = Modifier.weight(1f),
+                color = textMain,
+                fontSize = 13.sp
+            )
+            Switch(
+                checked = devSettings.showCitationCards,
+                onCheckedChange = onShowCitationCardsChange,
+                colors = SwitchDefaults.colors(checkedTrackColor = primaryBlue)
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -346,7 +387,7 @@ internal fun DeveloperModeSection(
             )
         }
         Text(
-            text = "v$appVersionName · debug · ${devSettings.effectiveBaseUrl}",
+            text = "v$appVersionName · debug · active ${devSettings.effectiveBaseUrl}",
             fontSize = 11.sp,
             color = textMain.copy(alpha = 0.6f)
         )
