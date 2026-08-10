@@ -21,16 +21,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.AccessibleForward
 import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,12 +37,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.AssistantState
 import com.wheelchair.cockpit.ui.components.ChatMessage
 import com.wheelchair.cockpit.ui.components.CitationCard
+import com.wheelchair.cockpit.ui.components.ManualInputBar
 import com.wheelchair.cockpit.ui.components.formatTimingLine
 import com.wheelchair.cockpit.ui.components.parseMarkdownToAnnotatedString
 import com.wheelchair.cockpit.ui.theme.CockpitTypography
@@ -54,25 +53,27 @@ import com.wheelchair.cockpit.ui.theme.CockpitTypography
 @Composable
 fun AssistantScreen(
     chatHistory: List<ChatMessage>,
-    assistantState: AssistantState,
     appLanguage: AppLanguage,
     textMain: Color,
     textSecondary: Color,
     primaryBlue: Color,
     surfaceColor: Color,
     onMicTap: () -> Unit,
-    onManualSend: (String) -> Unit,
     modifier: Modifier = Modifier,
-    // MODIFIED: citation cards + LM Studio-style timing footer + driving gate
+    // MODIFIED: restore citation cards + LM Studio-style timing footer
     showCitationCards: Boolean = true,
     showLatency: Boolean = false,
     outlineVariant: Color = textSecondary.copy(alpha = 0.35f),
+    // MODIFIED: restore text chat bar next to voice mic
+    assistantState: AssistantState = AssistantState.IDLE,
     isDrivingRestricted: Boolean = false,
+    onManualSend: (String) -> Unit = {},
 ) {
     val vi = appLanguage == AppLanguage.VIETNAMESE
     val listState = rememberLazyListState()
-    var inputText by remember { mutableStateOf("") }
+    var queryInput by remember { mutableStateOf("") }
 
+    // Welcome message shown when no history yet
     val welcomeMessage = ChatMessage(
         text = if (vi)
             "Xin chào! Tôi là Wheelchair Copilot - trợ lý ảo trên xe của bạn. Hãy hỏi tôi bất cứ điều gì hoặc ra lệnh điều khiển xe."
@@ -82,6 +83,7 @@ fun AssistantScreen(
     )
     val displayMessages = if (chatHistory.isEmpty()) listOf(welcomeMessage) else chatHistory
 
+    // Scroll to bottom whenever messages change
     LaunchedEffect(displayMessages.size) {
         if (displayMessages.isNotEmpty()) {
             listState.animateScrollToItem(displayMessages.size - 1)
@@ -91,6 +93,7 @@ fun AssistantScreen(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
+        // Message list
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -115,87 +118,56 @@ fun AssistantScreen(
             }
         }
 
-        // Bottom input — main UI (Stop when speaking) + driving-restricted send gate
-        Surface(
+        // --- START MODIFICATION ---
+        // Text field + send + mic (restored; overhaul left mic-only FAB)
+        Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(16.dp),
-            color = surfaceColor,
-            shape = RoundedCornerShape(32.dp),
-            shadowElevation = 6.dp
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
+            ManualInputBar(
+                queryInput = queryInput,
+                assistantState = assistantState,
+                appLanguage = appLanguage,
+                primaryBlue = primaryBlue,
+                surfaceContainer = surfaceColor,
+                textMain = textMain,
+                textSecondary = textSecondary,
+                outlineVariant = outlineVariant,
+                isDrivingRestricted = isDrivingRestricted,
+                onQueryInputChange = { queryInput = it },
+                onManualSend = { text ->
+                    onManualSend(text)
+                    queryInput = ""
+                },
+                modifier = Modifier.weight(1f)
+            )
+            val isSpeakingOrThinking =
+                assistantState == AssistantState.SPEAKING ||
+                    assistantState == AssistantState.PROCESSING
+            FloatingActionButton(
+                onClick = onMicTap,
+                shape = CircleShape,
+                containerColor = if (isSpeakingOrThinking) Color(0xFFEF4444) else primaryBlue,
+                contentColor = Color.White,
+                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
+                modifier = Modifier.size(52.dp)
             ) {
-                TextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    placeholder = {
-                        Text(
-                            text = if (vi) "Nhập lệnh của bạn..." else "Type your command...",
-                            color = textSecondary,
-                            style = CockpitTypography.body
-                        )
+                Icon(
+                    imageVector = if (isSpeakingOrThinking) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                    contentDescription = if (isSpeakingOrThinking) {
+                        if (vi) "Dừng" else "Stop"
+                    } else {
+                        if (vi) "Nói" else "Speak"
                     },
-                    modifier = Modifier.weight(1f),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        focusedTextColor = textMain,
-                        unfocusedTextColor = textMain
-                    ),
-                    textStyle = CockpitTypography.body,
-                    singleLine = true,
-                    enabled = !isDrivingRestricted
+                    modifier = Modifier.size(26.dp)
                 )
-
-                if (inputText.isNotBlank()) {
-                    IconButton(
-                        onClick = {
-                            if (isDrivingRestricted) return@IconButton
-                            onManualSend(inputText)
-                            inputText = ""
-                        }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Send,
-                            contentDescription = if (vi) "Gửi" else "Send",
-                            tint = primaryBlue
-                        )
-                    }
-                }
-
-                val isSpeakingOrThinking =
-                    assistantState == AssistantState.SPEAKING ||
-                        assistantState == AssistantState.PROCESSING
-                val buttonColor = if (isSpeakingOrThinking) Color(0xFFEF4444) else primaryBlue
-                val buttonIcon = if (isSpeakingOrThinking) Icons.Rounded.Stop else Icons.Rounded.Mic
-                val buttonDesc =
-                    if (isSpeakingOrThinking) (if (vi) "Dừng" else "Stop")
-                    else (if (vi) "Nói" else "Speak")
-
-                FloatingActionButton(
-                    onClick = onMicTap,
-                    modifier = Modifier.size(48.dp),
-                    shape = CircleShape,
-                    containerColor = buttonColor,
-                    contentColor = Color.White,
-                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 0.dp)
-                ) {
-                    Icon(
-                        imageVector = buttonIcon,
-                        contentDescription = buttonDesc,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
             }
         }
+        // --- END MODIFICATION ---
     }
 }
 
@@ -239,16 +211,10 @@ private fun ChatBubble(
 
         Column(
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-            modifier = Modifier
-                .weight(1f, fill = false)
-                .widthIn(max = 480.dp)
+            modifier = Modifier.widthIn(max = 520.dp)
         ) {
             Text(
-                text = if (isUser) {
-                    if (vi) "Bạn" else "You"
-                } else {
-                    "Copilot"
-                },
+                text = if (isUser) { if (vi) "Bạn" else "You" } else "Copilot",
                 style = CockpitTypography.caption.copy(fontSize = 10.sp),
                 color = textSecondary,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
@@ -278,6 +244,7 @@ private fun ChatBubble(
                             style = CockpitTypography.body,
                             color = textMain
                         )
+                        // --- START MODIFICATION ---
                         if (showCitationCards && message.citations.isNotEmpty()) {
                             Spacer(modifier = Modifier.size(8.dp))
                             message.citations.take(3).forEach { citation ->
@@ -296,9 +263,11 @@ private fun ChatBubble(
                                 text = formatTimingLine(message.timing),
                                 fontSize = 10.sp,
                                 color = textSecondary,
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
+                        // --- END MODIFICATION ---
                     }
                 }
             }
@@ -315,7 +284,10 @@ private fun ChatBubble(
             ) {
                 Text(
                     text = "U",
-                    style = CockpitTypography.caption.copy(fontSize = 13.sp),
+                    style = CockpitTypography.caption.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    ),
                     color = Color.White
                 )
             }

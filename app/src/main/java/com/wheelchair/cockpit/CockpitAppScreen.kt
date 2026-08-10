@@ -203,7 +203,6 @@ fun CockpitAppScreen(
 
                             Screen.ASSISTANT -> AssistantScreen(
                                 chatHistory = chatHistory,
-                                assistantState = assistantState,
                                 appLanguage = appLanguage,
                                 textMain = textMain,
                                 textSecondary = textSecondary,
@@ -216,6 +215,7 @@ fun CockpitAppScreen(
                                 showLatency = showDeveloperControls &&
                                     devSettings.developerModeEnabled,
                                 outlineVariant = outlineVariant,
+                                assistantState = assistantState,
                                 isDrivingRestricted = isDrivingRestricted,
                                 onManualSend = onManualSend
                             )
