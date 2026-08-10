@@ -1219,14 +1219,27 @@ class MainActivity : ComponentActivity() {
 
     private fun processUserSpeech(query: String) {
         autoSleepRunnable?.let { mainHandler.removeCallbacks(it) }
-        
-        if (query.isNotBlank()) {
-            chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = true, text = query))
-        }
 
         // --- START MODIFICATION ---
+        // Automotive STT term repair (epp→epb, hvec→hvac) before VHAL / RAG
+        val correctedResult = com.wheelchair.cockpit.voice.AutomotiveSttCorrect.correct(query)
+        val effectiveQuery = correctedResult.text
+        if (correctedResult.fixes.isNotEmpty()) {
+            Log.i(
+                "CockpitUI",
+                "STT-Correct: ${correctedResult.fixes.joinToString { "${it.first}→${it.second}" }} " +
+                    "raw=$query corrected=$effectiveQuery"
+            )
+        }
+
+        if (effectiveQuery.isNotBlank()) {
+            chatHistory.add(
+                com.wheelchair.cockpit.ui.components.ChatMessage(isUser = true, text = effectiveQuery)
+            )
+        }
+
         // Mirror safety gate: match on tone-folded text (gập ≡ gap, gương ≡ guong)
-        val qFold = foldVi(query)
+        val qFold = foldVi(effectiveQuery)
         val currentSpeed = carPropertyHelper.speedFlow.value
         val drivingLocked = isEffectiveDrivingRestricted()
         val isFoldAction = listOf("gap", "dong", "thu", "cat", "fold", "close", "retract")
@@ -1535,9 +1548,9 @@ class MainActivity : ComponentActivity() {
         assistantState.value = AssistantState.PROCESSING
         stopVoskListening()
         statusText.value = if (replyIsVietnamese) {
-            "Đang hỏi Copilot: \"$query\""
+            "Đang hỏi Copilot: \"$effectiveQuery\""
         } else {
-            "Asking Copilot: \"$query\""
+            "Asking Copilot: \"$effectiveQuery\""
         }
         citations.value = emptyList()
         partialPublisher.clear()
@@ -1546,7 +1559,7 @@ class MainActivity : ComponentActivity() {
             val started = SystemClock.elapsedRealtime()
             try {
                 val response = copilotRepository.sendQuery(
-                    query,
+                    effectiveQuery,
                     language = langCode,
                     sessionId = sessionId,
                     sessionTtlMin = sessionTtlMin.value
