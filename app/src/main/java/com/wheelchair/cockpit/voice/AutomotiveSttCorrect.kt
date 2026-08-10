@@ -9,10 +9,11 @@ package com.wheelchair.cockpit.voice
 object AutomotiveSttCorrect {
 
     // --- START MODIFICATION ---
+    // MODIFIED: keep eco+ecu both canonical — never hard-map / fuzzy-cross them
     private val canonicalAcronyms = setOf(
         "epb", "hvac", "adas", "aeb", "abs", "tpms", "isofix", "latch", "obd",
         "esc", "ldw", "lka", "bsm", "scc", "fca", "avn", "ics", "mil", "mist",
-        "eco", "ev", "vdc", "rcta", "bcw", "svm"
+        "eco", "ecu", "ev", "vdc", "rcta", "bcw", "svm"
     )
 
     /** Longer keys first (mirrors Python sorted by -len). */
@@ -20,6 +21,14 @@ object AutomotiveSttCorrect {
         "electronic parking brake" to "epb",
         "air conditioner" to "hvac",
         "aitch vac" to "hvac",
+        // MODIFIED: phonetic / near-miss STT of HVAC/AC (not arbitrary garbage)
+        "h v a c" to "hvac",
+        "aitch vee ay see" to "hvac",
+        "aitchveeaysee" to "hvac",
+        "a sea" to "hvac", // common STT of "AC" / trailing of HVAC
+        "a see" to "hvac",
+        "acey" to "hvac",
+        "hivac" to "hvac",
         "iso fix" to "isofix",
         "tee pms" to "tpms",
         "tp ms" to "tpms",
