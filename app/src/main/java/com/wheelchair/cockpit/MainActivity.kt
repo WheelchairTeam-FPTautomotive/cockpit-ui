@@ -5,6 +5,8 @@ import android.app.NotificationManager
 import android.car.VehiclePropertyIds
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.BroadcastReceiver
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -121,8 +123,24 @@ class MainActivity : ComponentActivity() {
     private var fallbackWakeEngine: WakeWordEngine? = null
     // --- END MODIFICATION ---
 
+    private val mockDrivingReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                "com.wheelchair.cockpit.MOCK_DRIVE" -> carPropertyHelper.mockDrivingState(true)
+                "com.wheelchair.cockpit.MOCK_PARK" -> carPropertyHelper.mockDrivingState(false)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Register mock driving receiver for demo
+        val filter = IntentFilter().apply {
+            addAction("com.wheelchair.cockpit.MOCK_DRIVE")
+            addAction("com.wheelchair.cockpit.MOCK_PARK")
+        }
+        registerReceiver(mockDrivingReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         geminiApiKey.value = BuildConfig.GEMINI_API_KEY.ifEmpty { "ai_studio_api_key_here" }
 
         // --- START MODIFICATION ---
@@ -178,11 +196,24 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            val speed by carPropertyHelper.speedFlow.collectAsState()
-            val hvacOn by carPropertyHelper.hvacOnFlow.collectAsState()
+            val speed = carPropertyHelper.speedFlow.collectAsState().value
+            val currentGear = carPropertyHelper.currentGearFlow.collectAsState().value
+            val batteryLevel = carPropertyHelper.batteryLevelFlow.collectAsState().value
+            val hvacOn = carPropertyHelper.hvacOnFlow.collectAsState().value
             val hvacTemp by carPropertyHelper.hvacTempFlow.collectAsState()
             val drivingRestricted by carPropertyHelper.uxRestrictionsFlow.collectAsState()
             val activeWarning by safetyWarning
+
+            val doorLockFL by carPropertyHelper.doorLockFL.collectAsState()
+            val doorLockFR by carPropertyHelper.doorLockFR.collectAsState()
+            val doorLockRL by carPropertyHelper.doorLockRL.collectAsState()
+            val doorLockRR by carPropertyHelper.doorLockRR.collectAsState()
+
+            val tirePressureFL by carPropertyHelper.tirePressureFL.collectAsState()
+            val tirePressureFR by carPropertyHelper.tirePressureFR.collectAsState()
+            val tirePressureRL by carPropertyHelper.tirePressureRL.collectAsState()
+            val tirePressureRR by carPropertyHelper.tirePressureRR.collectAsState()
+
             // --- START MODIFICATION ---
             val copilotUiState by remember {
                 derivedStateOf {
@@ -219,13 +250,25 @@ class MainActivity : ComponentActivity() {
                     chatHistory = chatHistory,
                     citations = citations.value,
                     vehicleSpeed = speed,
+                    currentGear = currentGear,
+                    batteryLevel = batteryLevel,
                     isHvacOn = hvacOn,
                     hvacTemp = hvacTemp,
+                    doorLockFL = doorLockFL,
+                    doorLockFR = doorLockFR,
+                    doorLockRL = doorLockRL,
+                    doorLockRR = doorLockRR,
+                    tirePressureFL = tirePressureFL,
+                    tirePressureFR = tirePressureFR,
+                    tirePressureRL = tirePressureRL,
+                    tirePressureRR = tirePressureRR,
                     rmsLevel = rmsLevel.floatValue,
                     appLanguage = appLanguage.value,
                     displayTheme = displayTheme.value,
                     isDrivingRestricted = effectiveDrivingRestricted,
                     onHvacToggle = { toggleHvacProperty() },
+                    onTempChange = { newTemp -> carPropertyHelper.setHvacTemperature(0, newTemp) },
+                    onDoorLockToggle = { areaId, lock -> carPropertyHelper.setDoorLock(areaId, lock) },
                     onManualSend = { query -> processUserSpeech(query) },
                     onMicTap = { handleMicTap() },
                     onWakeSimulate = { triggerKeywordWake() },

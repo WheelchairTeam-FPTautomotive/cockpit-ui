@@ -57,13 +57,25 @@ fun CockpitAppScreen(
     chatHistory: List<com.wheelchair.cockpit.ui.components.ChatMessage>,
     citations: List<CitationInfo>,
     vehicleSpeed: Float,
+    currentGear: String,
+    batteryLevel: Int,
     isHvacOn: Boolean,
     hvacTemp: Float,
+    doorLockFL: Boolean,
+    doorLockFR: Boolean,
+    doorLockRL: Boolean,
+    doorLockRR: Boolean,
+    tirePressureFL: Int,
+    tirePressureFR: Int,
+    tirePressureRL: Int,
+    tirePressureRR: Int,
     rmsLevel: Float,
     appLanguage: AppLanguage,
     displayTheme: DisplayTheme,
     isDrivingRestricted: Boolean = false,
     onHvacToggle: () -> Unit,
+    onTempChange: (Float) -> Unit,
+    onDoorLockToggle: (Int, Boolean) -> Unit,
     onManualSend: (String) -> Unit,
     onMicTap: () -> Unit,
     onWakeSimulate: () -> Unit,
@@ -85,7 +97,6 @@ fun CockpitAppScreen(
     lastQueryLatencyMs: Long? = null
 ) {
     var selectedScreen by remember { mutableStateOf(Screen.DASHBOARD) }
-    var localTemp by remember { androidx.compose.runtime.mutableFloatStateOf(hvacTemp) }
 
     val primaryBlue = CockpitColors.getPrimaryBlue(displayTheme)
     val backgroundBg = CockpitColors.getBackgroundBg(displayTheme)
@@ -127,11 +138,22 @@ fun CockpitAppScreen(
                         when (screen) {
                             Screen.DASHBOARD -> DashboardScreen(
                                 vehicleSpeed = vehicleSpeed,
+                                currentGear = currentGear,
+                                batteryLevel = batteryLevel,
                                 isHvacOn = isHvacOn,
                                 hvacTemp = hvacTemp,
+                                doorLockFL = doorLockFL,
+                                doorLockFR = doorLockFR,
+                                doorLockRL = doorLockRL,
+                                doorLockRR = doorLockRR,
+                                tirePressureFL = tirePressureFL,
+                                tirePressureFR = tirePressureFR,
+                                tirePressureRL = tirePressureRL,
+                                tirePressureRR = tirePressureRR,
                                 onHvacToggle = onHvacToggle,
-                                onTempUp = { localTemp = (localTemp + 0.5f).coerceAtMost(32f) },
-                                onTempDown = { localTemp = (localTemp - 0.5f).coerceAtLeast(16f) },
+                                onDoorLockToggle = onDoorLockToggle,
+                                onTempUp = { onTempChange((hvacTemp + 0.5f).coerceAtMost(32f)) },
+                                onTempDown = { onTempChange((hvacTemp - 0.5f).coerceAtLeast(16f)) },
                                 appLanguage = appLanguage,
                                 displayTheme = displayTheme
                             )

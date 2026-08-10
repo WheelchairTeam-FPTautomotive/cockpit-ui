@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +53,8 @@ fun VehicleVisualization(
     rearLeftLocked: Boolean,
     rearRightLocked: Boolean,
     vehicleSpeed: Float,
+    currentGear: String,
+    batteryLevel: Int,
     vi: Boolean,
     primaryColor: Color,
     textMain: Color,
@@ -191,7 +194,7 @@ fun VehicleVisualization(
                 
                 // Middle: PRND
                 PrndSelector(
-                    currentGear = "P",
+                    currentGear = currentGear,
                     textMain = textMain,
                     textSecondary = textSecondary,
                     primaryColor = primaryColor,
@@ -233,7 +236,7 @@ fun VehicleVisualization(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            "78%",
+                            "$batteryLevel%",
                             style = com.wheelchair.cockpit.ui.theme.CockpitTypography.title.copy(fontSize = 22.sp),
                             color = textMain
                         )
@@ -308,7 +311,7 @@ private fun DoorLock(
 ) {
     val tint = if (locked) primaryColor else textSecondary.copy(alpha = 0.4f)
     Icon(
-        imageVector = Icons.Rounded.Lock,
+        imageVector = if (locked) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
         contentDescription = if (locked) "Locked" else "Unlocked",
         tint = tint,
         modifier = modifier

@@ -40,9 +40,20 @@ import com.wheelchair.cockpit.ui.theme.CockpitColors
 @Composable
 fun DashboardScreen(
     vehicleSpeed: Float,
+    currentGear: String,
+    batteryLevel: Int,
     isHvacOn: Boolean,
     hvacTemp: Float,
+    doorLockFL: Boolean,
+    doorLockFR: Boolean,
+    doorLockRL: Boolean,
+    doorLockRR: Boolean,
+    tirePressureFL: Int,
+    tirePressureFR: Int,
+    tirePressureRL: Int,
+    tirePressureRR: Int,
     onHvacToggle: () -> Unit,
+    onDoorLockToggle: (Int, Boolean) -> Unit,
     onTempUp: () -> Unit,
     onTempDown: () -> Unit,
     appLanguage: AppLanguage,
@@ -57,7 +68,7 @@ fun DashboardScreen(
     val outlineVariant = CockpitColors.getOutlineVariant(displayTheme)
     val accentGreen = CockpitColors.getAccentGreen(displayTheme)
 
-    var doorStates by remember { mutableStateOf(DoorStates()) }
+
     val vi = appLanguage == AppLanguage.VIETNAMESE
 
     Column(
@@ -84,11 +95,13 @@ fun DashboardScreen(
             ) {
                 // Center: vehicle visualization + PRND + Speed & Battery
                 VehicleVisualization(
-                    frontLeftLocked = doorStates.frontLeft,
-                    frontRightLocked = doorStates.frontRight,
-                    rearLeftLocked = doorStates.rearLeft,
-                    rearRightLocked = doorStates.rearRight,
+                    frontLeftLocked = doorLockFL,
+                    frontRightLocked = doorLockFR,
+                    rearLeftLocked = doorLockRL,
+                    rearRightLocked = doorLockRR,
                     vehicleSpeed = vehicleSpeed,
+                    currentGear = currentGear,
+                    batteryLevel = batteryLevel,
                     vi = vi,
                     primaryColor = primaryBlue,
                     textMain = textMain,
@@ -96,10 +109,14 @@ fun DashboardScreen(
                     outlineVariant = outlineVariant,
                     accentGreen = accentGreen,
                     theme = displayTheme,
-                    onFrontLeftToggle = { doorStates = doorStates.copy(frontLeft = !doorStates.frontLeft) },
-                    onFrontRightToggle = { doorStates = doorStates.copy(frontRight = !doorStates.frontRight) },
-                    onRearLeftToggle = { doorStates = doorStates.copy(rearLeft = !doorStates.rearLeft) },
-                    onRearRightToggle = { doorStates = doorStates.copy(rearRight = !doorStates.rearRight) },
+                    onFrontLeftToggle = { onDoorLockToggle(1, !doorLockFL) },
+                    onFrontRightToggle = { onDoorLockToggle(4, !doorLockFR) },
+                    onRearLeftToggle = { onDoorLockToggle(16, !doorLockRL) },
+                    onRearRightToggle = { onDoorLockToggle(64, !doorLockRR) },
+                    flPsi = tirePressureFL,
+                    frPsi = tirePressureFR,
+                    rlPsi = tirePressureRL,
+                    rrPsi = tirePressureRR,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -116,6 +133,7 @@ fun DashboardScreen(
                     primaryColor = primaryBlue,
                     textMain = textMain,
                     textSecondary = textSecondary,
+                    appLanguage = appLanguage,
                     modifier = Modifier.height(180.dp)
                 )
                 
@@ -151,19 +169,4 @@ fun DashboardScreen(
     }
 }
 
-private data class DoorStates(
-    val frontLeft: Boolean = true,
-    val frontRight: Boolean = true,
-    val rearLeft: Boolean = true,
-    val rearRight: Boolean = true
-) {
-    val allLocked: Boolean
-        get() = frontLeft && frontRight && rearLeft && rearRight
 
-    constructor(allLocked: Boolean) : this(
-        frontLeft = allLocked,
-        frontRight = allLocked,
-        rearLeft = allLocked,
-        rearRight = allLocked
-    )
-}

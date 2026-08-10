@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.wheelchair.cockpit.model.DisplayTheme
 
 @Composable
@@ -20,8 +21,10 @@ fun TripEfficiencyModule(
     primaryColor: Color,
     textMain: Color,
     textSecondary: Color,
+    appLanguage: com.wheelchair.cockpit.model.AppLanguage,
     modifier: Modifier = Modifier
 ) {
+    val vi = appLanguage == com.wheelchair.cockpit.model.AppLanguage.VIETNAMESE
     GlassSurface(
         modifier = modifier.fillMaxWidth(),
         theme = theme,
@@ -39,7 +42,7 @@ fun TripEfficiencyModule(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Trip & Efficiency",
+                        text = if (vi) "Hành trình & Hiệu suất" else "Trip & Efficiency",
                         style = com.wheelchair.cockpit.ui.theme.CockpitTypography.title,
                         color = textMain
                     )
@@ -62,12 +65,12 @@ fun TripEfficiencyModule(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.EvStation, contentDescription = null, tint = textSecondary, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Since Charge", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.label, color = textSecondary)
+                            Icon(Icons.Rounded.EvStation, contentDescription = null, tint = textSecondary, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (vi) "Từ lần sạc cuối" else "Since Charge", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.body.copy(fontSize = 16.sp), color = textSecondary)
                         }
-                        Text("18.4 kWh/100km", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.title, color = textMain)
-                        Text("124 km driven", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.body, color = textSecondary)
+                        Text("18.4 kWh/100km", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.title.copy(fontSize = 18.sp), color = textMain)
+                        Text(if (vi) "Đã đi 124 km" else "124 km driven", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.body.copy(fontSize = 14.sp), color = textSecondary)
                     }
                     
                     // Right stat
@@ -76,12 +79,12 @@ fun TripEfficiencyModule(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Speed, contentDescription = null, tint = textSecondary, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Current Trip", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.label, color = textSecondary)
+                            Icon(Icons.Rounded.Speed, contentDescription = null, tint = textSecondary, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (vi) "Hành trình hiện tại" else "Current Trip", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.body.copy(fontSize = 16.sp), color = textSecondary)
                         }
-                        Text("15.2 kWh/100km", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.title, color = textMain)
-                        Text("32 km driven", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.body, color = textSecondary)
+                        Text("15.2 kWh/100km", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.title.copy(fontSize = 18.sp), color = textMain)
+                        Text(if (vi) "Đã đi 32 km" else "32 km driven", style = com.wheelchair.cockpit.ui.theme.CockpitTypography.body.copy(fontSize = 14.sp), color = textSecondary)
                     }
                 }
             }

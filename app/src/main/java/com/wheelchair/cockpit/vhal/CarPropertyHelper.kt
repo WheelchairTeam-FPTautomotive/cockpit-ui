@@ -13,6 +13,12 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 class CarPropertyHelper(
     private val context: Context,
@@ -25,15 +31,69 @@ class CarPropertyHelper(
     private var uxRestrictionsManager: CarUxRestrictionsManager? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Telemetry Stream Abstraction: Expose reactive StateFlow streams
     private val _speedFlow = MutableStateFlow(0f)
     val speedFlow: StateFlow<Float> = _speedFlow.asStateFlow()
+
+    private val _currentGearFlow = MutableStateFlow("P")
+    val currentGearFlow: StateFlow<String> = _currentGearFlow.asStateFlow()
+
+    private val _batteryLevelFlow = MutableStateFlow(78)
+    val batteryLevelFlow: StateFlow<Int> = _batteryLevelFlow.asStateFlow()
+
+    // Hackathon Demo Override
+    private var isMocking = false
+    private var mockJob: Job? = null
+
+    fun mockDrivingState(isDriving: Boolean) {
+        isMocking = true
+        if (isDriving) {
+            isGearDrive = true
+            _currentGearFlow.value = "D"
+            _speedFlow.value = 90f
+            
+            mockJob?.cancel()
+            mockJob = CoroutineScope(Dispatchers.Main).launch {
+                while(isActive) {
+                    delay(2000)
+                    if (_batteryLevelFlow.value > 5) {
+                        _batteryLevelFlow.value -= 1
+                    }
+                }
+            }
+        } else {
+            isGearDrive = false
+            _currentGearFlow.value = "P"
+            _speedFlow.value = 0f
+            mockJob?.cancel()
+        }
+        evaluateRestrictions()
+    }
 
     private val _hvacOnFlow = MutableStateFlow(false)
     val hvacOnFlow: StateFlow<Boolean> = _hvacOnFlow.asStateFlow()
 
     private val _hvacTempFlow = MutableStateFlow(24.0f)
     val hvacTempFlow: StateFlow<Float> = _hvacTempFlow.asStateFlow()
+
+    // Doors
+    private val _doorLockFL = MutableStateFlow(true)
+    val doorLockFL: StateFlow<Boolean> = _doorLockFL.asStateFlow()
+    private val _doorLockFR = MutableStateFlow(true)
+    val doorLockFR: StateFlow<Boolean> = _doorLockFR.asStateFlow()
+    private val _doorLockRL = MutableStateFlow(true)
+    val doorLockRL: StateFlow<Boolean> = _doorLockRL.asStateFlow()
+    private val _doorLockRR = MutableStateFlow(true)
+    val doorLockRR: StateFlow<Boolean> = _doorLockRR.asStateFlow()
+
+    // Tires
+    private val _tirePressureFL = MutableStateFlow(36)
+    val tirePressureFL: StateFlow<Int> = _tirePressureFL.asStateFlow()
+    private val _tirePressureFR = MutableStateFlow(36)
+    val tirePressureFR: StateFlow<Int> = _tirePressureFR.asStateFlow()
+    private val _tirePressureRL = MutableStateFlow(36)
+    val tirePressureRL: StateFlow<Int> = _tirePressureRL.asStateFlow()
+    private val _tirePressureRR = MutableStateFlow(36)
+    val tirePressureRR: StateFlow<Int> = _tirePressureRR.asStateFlow()
 
     // Debounce: ignore VHAL callbacks for 2s after a write to prevent emulator stale-value overwrite
     private var hvacWritePendingUntil: Long = 0L
@@ -57,6 +117,7 @@ class CarPropertyHelper(
             // Push VHAL updates safely to state streams
             when (value.propertyId) {
                 VehiclePropertyIds.PERF_VEHICLE_SPEED, VehiclePropertyIds.PERF_VEHICLE_SPEED_DISPLAY -> {
+                    if (isMocking) return
                     val rawSpeed = when (val v = value.value) {
                         is Float -> v
                         is Int -> v.toFloat()
@@ -84,11 +145,41 @@ class CarPropertyHelper(
                     }
                 }
                 VehiclePropertyIds.GEAR_SELECTION -> {
+                    if (isMocking) return
                     if (value.value is Int) {
                         val gear = value.value as Int
-                        // android.car.hardware.CarSensorEvent.GEAR_DRIVE = 8, GEAR_REVERSE = 2
+                        // android.car.hardware.CarSensorEvent.GEAR_DRIVE = 8, GEAR_REVERSE = 2, GEAR_PARK = 4, GEAR_NEUTRAL = 1
                         isGearDrive = (gear == 8 || gear == 2)
+                        _currentGearFlow.value = when (gear) {
+                            1 -> "N"
+                            2 -> "R"
+                            4 -> "P"
+                            8 -> "D"
+                            else -> "P"
+                        }
                         evaluateRestrictions()
+                    }
+                }
+                VehiclePropertyIds.DOOR_LOCK -> {
+                    if (value.value is Boolean) {
+                        val locked = value.value as Boolean
+                        when (value.areaId) {
+                            1 -> _doorLockFL.value = locked
+                            4 -> _doorLockFR.value = locked
+                            16 -> _doorLockRL.value = locked
+                            64 -> _doorLockRR.value = locked
+                        }
+                    }
+                }
+                VehiclePropertyIds.TIRE_PRESSURE -> {
+                    if (value.value is Float) {
+                        val psi = ((value.value as Float) * 0.145038f).toInt()
+                        when (value.areaId) {
+                            1 -> _tirePressureFL.value = psi
+                            2 -> _tirePressureFR.value = psi
+                            4 -> _tirePressureRL.value = psi
+                            8 -> _tirePressureRR.value = psi
+                        }
                     }
                 }
             }
@@ -225,10 +316,49 @@ class CarPropertyHelper(
             )
             val gear = manager.getProperty<Int>(VehiclePropertyIds.GEAR_SELECTION, 0)?.value ?: 0
             isGearDrive = (gear == 8 || gear == 2)
+            _currentGearFlow.value = when (gear) {
+                1 -> "N"
+                2 -> "R"
+                4 -> "P"
+                8 -> "D"
+                else -> "P"
+            }
             evaluateRestrictions()
         } catch (e: Exception) {
             Log.w("CarPropertyHelper", "GEAR_SELECTION listener failed: ${e.message}")
         }
+
+        // 4. Doors and Tires
+        try {
+            manager.registerCallback(vhalCallback, VehiclePropertyIds.DOOR_LOCK, CarPropertyManager.SENSOR_RATE_ONCHANGE)
+            listOf(1, 4, 16, 64).forEach { area ->
+                val lock = manager.getProperty<Boolean>(VehiclePropertyIds.DOOR_LOCK, area)?.value
+                if (lock != null) {
+                    when (area) {
+                        1 -> _doorLockFL.value = lock
+                        4 -> _doorLockFR.value = lock
+                        16 -> _doorLockRL.value = lock
+                        64 -> _doorLockRR.value = lock
+                    }
+                }
+            }
+        } catch (e: Exception) {}
+
+        try {
+            manager.registerCallback(vhalCallback, VehiclePropertyIds.TIRE_PRESSURE, CarPropertyManager.SENSOR_RATE_ONCHANGE)
+            listOf(1, 2, 4, 8).forEach { area ->
+                val press = manager.getProperty<Float>(VehiclePropertyIds.TIRE_PRESSURE, area)?.value
+                if (press != null) {
+                    val psi = (press * 0.145038f).toInt()
+                    when (area) {
+                        1 -> _tirePressureFL.value = psi
+                        2 -> _tirePressureFR.value = psi
+                        4 -> _tirePressureRL.value = psi
+                        8 -> _tirePressureRR.value = psi
+                    }
+                }
+            }
+        } catch (e: Exception) {}
     }
 
 
