@@ -8,6 +8,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.Multipart
 import retrofit2.http.Part
@@ -19,8 +20,12 @@ interface CopilotService {
     @GET("api/v1/health")
     suspend fun checkHealth(): Map<String, String>
 
+    // MODIFIED: Wave2 — X-Skip-TTS so cockpit uses speakOut (faster E2E)
     @POST("api/v1/copilot/query")
-    suspend fun queryCopilot(@Body request: QueryRequest): QueryResponse
+    suspend fun queryCopilot(
+        @Body request: QueryRequest,
+        @Header("X-Skip-TTS") skipTts: String = "1"
+    ): QueryResponse
 
     @Multipart
     @POST("api/v1/copilot/voice-query")

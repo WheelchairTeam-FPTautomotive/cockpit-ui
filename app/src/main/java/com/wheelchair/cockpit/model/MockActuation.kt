@@ -21,9 +21,25 @@ data class MockActuationEvent(
 )
 
 fun mockActuationForCommandId(commandId: String?): MockActuationEvent? {
+    // --- START MODIFICATION ---
+    // Wave1: TRUNK / WINDOW / HVAC_TEMP_SET parity with gateway CommandID
     val id = commandId?.trim()?.uppercase().orEmpty()
     if (id.isEmpty() || id == "GENERIC_CONTROL") return null
     return when {
+        id.contains("TRUNK") -> MockActuationEvent(
+            kind = MockActuationKind.DOOR,
+            titleVi = "Cốp xe",
+            titleEn = "Trunk",
+            subtitleVi = "Mô phỏng điều khiển cốp thành công",
+            subtitleEn = "Mock trunk actuation succeeded"
+        )
+        id.contains("WINDOW") -> MockActuationEvent(
+            kind = MockActuationKind.DOOR,
+            titleVi = "Cửa sổ",
+            titleEn = "Windows",
+            subtitleVi = "Mô phỏng điều khiển kính thành công",
+            subtitleEn = "Mock window actuation succeeded"
+        )
         id.contains("DOOR") -> MockActuationEvent(
             kind = MockActuationKind.DOOR,
             titleVi = "Cửa xe",
@@ -35,10 +51,18 @@ fun mockActuationForCommandId(commandId: String?): MockActuationEvent? {
             kind = MockActuationKind.HVAC,
             titleVi = "Điều hòa",
             titleEn = "Climate",
-            subtitleVi = "Mô phỏng HVAC thành công",
-            subtitleEn = "Mock HVAC actuation succeeded"
+            subtitleVi = if (id.contains("TEMP")) {
+                "Mô phỏng chỉnh nhiệt độ thành công"
+            } else {
+                "Mô phỏng HVAC thành công"
+            },
+            subtitleEn = if (id.contains("TEMP")) {
+                "Mock temperature set succeeded"
+            } else {
+                "Mock HVAC actuation succeeded"
+            }
         )
-        id.contains("MUSIC") || id.contains("MEDIA") -> MockActuationEvent(
+        id.contains("MUSIC") || id.contains("MEDIA") || id.contains("VOLUME") -> MockActuationEvent(
             kind = MockActuationKind.MUSIC,
             titleVi = "Âm nhạc",
             titleEn = "Music",
@@ -53,6 +77,7 @@ fun mockActuationForCommandId(commandId: String?): MockActuationEvent? {
             subtitleEn = "Mock command $id"
         )
     }
+    // --- END MODIFICATION ---
 }
 
 fun mockActuationForRagSuccess(vietnamese: Boolean): MockActuationEvent =

@@ -1323,6 +1323,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // --- START MODIFICATION ---
+        // Wave1: HVAC temp bounds (16–30°C / 60–85°F); trunk/window before door
         // 1. HVAC Control
         if (mentionsHvac) {
             val turnOn = qFold.contains("bat") || qFold.contains("mo") ||
@@ -1330,7 +1332,7 @@ class MainActivity : ComponentActivity() {
             val turnOff = qFold.contains("tat") || qFold.contains("turn off")
             val adjust = qFold.contains("tang") || qFold.contains("giam") ||
                 qFold.contains("turn up") || qFold.contains("turn down") ||
-                qFold.contains("van")
+                qFold.contains("van") || qFold.contains("set") || qFold.contains("chinh")
 
             if (turnOn || turnOff || adjust || tempMatch != null) {
                 if (!turnOn && !turnOff && !isHvacOn.value) {
@@ -1345,6 +1347,36 @@ class MainActivity : ComponentActivity() {
                     statusText.value = rejectReply
                     speakOut(rejectReply)
                     return
+                }
+
+                if (tempMatch != null) {
+                    val tempValue = tempMatch.groupValues[1].toFloatOrNull()
+                    if (tempValue != null) {
+                        val isFahrenheit = tempValue > 40f
+                        val inBounds = if (isFahrenheit) {
+                            tempValue in 60f..85f
+                        } else {
+                            tempValue in 16f..30f
+                        }
+                        if (!inBounds) {
+                            val rejectReply = if (replyIsVietnamese) {
+                                "Nhiệt độ ngoài khoảng cho phép (16–30°C / 60–85°F)."
+                            } else {
+                                "Temperature must be within 16–30°C or 60–85°F."
+                            }
+                            chatHistory.add(
+                                com.wheelchair.cockpit.ui.components.ChatMessage(
+                                    isUser = false,
+                                    text = rejectReply
+                                )
+                            )
+                            citations.value = emptyList()
+                            assistantState.value = AssistantState.IDLE
+                            statusText.value = rejectReply
+                            speakOut(rejectReply)
+                            return
+                        }
+                    }
                 }
 
                 if (turnOn) {
@@ -1404,8 +1436,94 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // 1b. Trunk / cốp — before generic door (cop ≠ cửa)
+        if (qFold.contains("cop") || qFold.contains("trunk") || qFold.contains("boot") ||
+            qFold.contains("cappo")
+        ) {
+            val openTrunk = qFold.contains("mo") || qFold.contains("open")
+            val closeTrunk = qFold.contains("dong") || qFold.contains("close")
+            if (openTrunk || closeTrunk) {
+                if (drivingLocked) {
+                    val rejectReply = if (replyIsVietnamese) {
+                        "Không thể mở cốp khi đang lái. Vui lòng dừng xe an toàn."
+                    } else {
+                        "Trunk controls are locked while driving. Please stop safely first."
+                    }
+                    chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = rejectReply))
+                    citations.value = emptyList()
+                    assistantState.value = AssistantState.IDLE
+                    statusText.value = rejectReply
+                    speakOut(rejectReply)
+                    return
+                }
+                val reply = if (replyIsVietnamese) {
+                    if (openTrunk) "Đã mở cốp xe." else "Đã đóng cốp xe."
+                } else {
+                    if (openTrunk) "Trunk opened." else "Trunk closed."
+                }
+                chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = reply))
+                citations.value = emptyList()
+                assistantState.value = AssistantState.IDLE
+                statusText.value = reply
+                showMockActuation(
+                    MockActuationEvent(
+                        kind = MockActuationKind.DOOR,
+                        titleVi = "Cốp xe",
+                        titleEn = "Trunk",
+                        subtitleVi = reply,
+                        subtitleEn = reply
+                    )
+                )
+                speakOut(reply)
+                return
+            }
+        }
+
+        // 1c. Window / kính — before generic door
+        if (qFold.contains("cua so") || qFold.contains("window") || qFold.contains("kinh")) {
+            val openWin = qFold.contains("mo") || qFold.contains("ha") ||
+                qFold.contains("open") || qFold.contains("lower")
+            val closeWin = qFold.contains("dong") || qFold.contains("len kinh") ||
+                qFold.contains("close") || qFold.contains("raise")
+            if (openWin || closeWin) {
+                if (drivingLocked) {
+                    val rejectReply = if (replyIsVietnamese) {
+                        "Không thể hạ kính khi đang lái. Vui lòng dừng xe an toàn."
+                    } else {
+                        "Window controls are locked while driving. Please stop safely first."
+                    }
+                    chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = rejectReply))
+                    citations.value = emptyList()
+                    assistantState.value = AssistantState.IDLE
+                    statusText.value = rejectReply
+                    speakOut(rejectReply)
+                    return
+                }
+                val reply = if (replyIsVietnamese) {
+                    if (openWin) "Đã hạ kính cửa sổ." else "Đã nâng kính cửa sổ."
+                } else {
+                    if (openWin) "Window lowered." else "Window raised."
+                }
+                chatHistory.add(com.wheelchair.cockpit.ui.components.ChatMessage(isUser = false, text = reply))
+                citations.value = emptyList()
+                assistantState.value = AssistantState.IDLE
+                statusText.value = reply
+                showMockActuation(
+                    MockActuationEvent(
+                        kind = MockActuationKind.DOOR,
+                        titleVi = "Cửa sổ",
+                        titleEn = "Windows",
+                        subtitleVi = reply,
+                        subtitleEn = reply
+                    )
+                )
+                speakOut(reply)
+                return
+            }
+        }
+
         // 2. Door Control — blocked while driving lock is on
-        if (qFold.contains("cua") || qFold.contains("door")) {
+        if ((qFold.contains("cua") && !qFold.contains("cua so")) || qFold.contains("door")) {
             val unlock = qFold.contains("mo") || qFold.contains("unlock") || qFold.contains("open")
             val lock = qFold.contains("khoa") || qFold.contains("dong") ||
                 qFold.contains("lock") || qFold.contains("close")
@@ -1447,6 +1565,7 @@ class MainActivity : ComponentActivity() {
                 return
             }
         }
+        // --- END MODIFICATION ---
 
         // 2b. Music transport via MediaControllerRepository (voice allowed while driving)
         val mentionsMusic = listOf(
