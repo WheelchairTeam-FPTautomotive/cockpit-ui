@@ -17,9 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -71,10 +69,7 @@ fun CopilotResponsePanel(
     modifier: Modifier = Modifier,
     // --- START MODIFICATION ---
     partialTranscript: String = "",
-    micDiagLabel: String = "",
-    isDrivingRestricted: Boolean = false,
     showLatency: Boolean = false,
-    showEvidence: Boolean = false,
     lastHealthLatencyMs: Long? = null
     // --- END MODIFICATION ---
 ) {
@@ -188,11 +183,11 @@ fun CopilotResponsePanel(
                                                 fontSize = 15.sp,
                                                 lineHeight = 21.sp
                                             )
-                                            if (showEvidence && msg.citations.isNotEmpty()) {
-                                                Spacer(modifier = Modifier.height(10.dp))
-                                                msg.citations.forEach { citation ->
+                                            if (msg.citations.isNotEmpty()) {
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                msg.citations.take(2).forEach { citation ->
                                                     CitationCard(citation, primaryBlue, textMain, surfaceContainerLow, outlineVariant)
-                                                    Spacer(modifier = Modifier.height(4.dp))
+                                                    Spacer(modifier = Modifier.height(3.dp))
                                                 }
                                             }
                                             // --- START MODIFICATION ---
@@ -214,40 +209,7 @@ fun CopilotResponsePanel(
                             }
                         }
                         
-                        // Active listening/processing state
-                        if (assistantState != AssistantState.IDLE) {
-                            item {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                                    Surface(
-                                        color = surfaceContainer,
-                                        border = BorderStroke(1.dp, outlineVariant),
-                                        shape = RoundedCornerShape(16.dp),
-                                        modifier = Modifier.widthIn(max = 320.dp)
-                                    ) {
-                                        Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                            StitchVoiceWaveform(
-                                                rmsLevel = rmsLevel,
-                                                primaryColor = primaryBlue,
-                                                modifier = Modifier.fillMaxWidth().height(40.dp)
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            val fallback = when (assistantState) {
-                                                AssistantState.PROCESSING -> if (vi) "Đang suy nghĩ..." else "Analyzing..."
-                                                else -> if (vi) "Đang lắng nghe..." else "Listening..."
-                                            }
-                                            val caption = partialTranscript.ifBlank { fallback }
-                                            Text(
-                                                text = caption,
-                                                fontSize = 14.sp,
-                                                fontStyle = FontStyle.Italic,
-                                                color = textSecondary.copy(alpha = 0.8f),
-                                                textAlign = TextAlign.Center
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+
                     }
                 } else {
                     // Empty state

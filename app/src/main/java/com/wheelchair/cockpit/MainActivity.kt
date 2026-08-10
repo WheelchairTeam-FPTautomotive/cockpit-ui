@@ -41,9 +41,15 @@ import com.wheelchair.cockpit.dev.DevSettingsStore
 import com.wheelchair.cockpit.dev.HttpLogLevel
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.AssistantState
+import com.wheelchair.cockpit.model.ControlKind
+import com.wheelchair.cockpit.model.CopilotUiState
 import com.wheelchair.cockpit.model.DisplayTheme
+import com.wheelchair.cockpit.model.MockActuationEvent
+import com.wheelchair.cockpit.model.MockActuationKind
+import com.wheelchair.cockpit.model.mockActuationForCommandId
+import com.wheelchair.cockpit.model.mockActuationForRagSuccess
 import com.wheelchair.cockpit.ui.components.*
-import com.wheelchair.cockpit.ui.dialogs.SystemSettingsDialog
+
 import com.wheelchair.cockpit.ui.theme.CockpitColors
 import com.wheelchair.cockpit.vhal.CarPropertyHelper
 import com.wheelchair.cockpit.voice.MicDiag
@@ -89,7 +95,6 @@ class MainActivity : ComponentActivity() {
 
     private var appLanguage = mutableStateOf(AppLanguage.VIETNAMESE)
     private var displayTheme = mutableStateOf(DisplayTheme.LIGHT)
-    private var showSettingsDialog = mutableStateOf(false)
     private var geminiApiKey = mutableStateOf("")
     // --- START MODIFICATION ---
     private var healthResult = mutableStateOf<HealthResult?>(null)
@@ -163,10 +168,6 @@ class MainActivity : ComponentActivity() {
             onUxRestrictionsChanged = { isRestricted ->
                 runOnUiThread {
                     isDrivingRestricted.value = isRestricted
-                    // MODIFIED: honor developer-mode driving bypass
-                    if (isRestricted && !devSettingsStore.current().effectiveBypassDrivingLock) {
-                        showSettingsDialog.value = false
-                    }
                 }
             }
         )
@@ -177,8 +178,25 @@ class MainActivity : ComponentActivity() {
             val hvacTemp by carPropertyHelper.hvacTempFlow.collectAsState()
             val drivingRestricted by carPropertyHelper.uxRestrictionsFlow.collectAsState()
             val activeWarning by safetyWarning
-            val activeActuation by mockActuation
             // --- START MODIFICATION ---
+            val copilotUiState by remember {
+                derivedStateOf {
+                    when (val actuation = mockActuation.value) {
+                        null -> when (assistantState.value) {
+                            AssistantState.IDLE -> CopilotUiState.Idle
+                            AssistantState.WAKE_DETECTED -> CopilotUiState.Listening
+                            AssistantState.PROCESSING -> CopilotUiState.Thinking
+                            AssistantState.SPEAKING -> CopilotUiState.Speaking
+                        }
+                        else -> when (actuation.kind) {
+                            MockActuationKind.RAG -> CopilotUiState.RagAnswer
+                            MockActuationKind.DOOR -> CopilotUiState.ControlSuccess(ControlKind.DOOR)
+                            MockActuationKind.HVAC -> CopilotUiState.ControlSuccess(ControlKind.HVAC)
+                            MockActuationKind.MUSIC -> CopilotUiState.ControlSuccess(ControlKind.MUSIC)
+                        }
+                    }
+                }
+            }
             val devSettings by devSettingsStore.settings.collectAsState()
             LaunchedEffect(devSettings) {
                 CopilotClient.applyLogLevel(devSettings)
@@ -191,6 +209,7 @@ class MainActivity : ComponentActivity() {
             Box(modifier = Modifier.fillMaxSize()) {
                 CockpitAppScreen(
                     assistantState = assistantState.value,
+                    copilotUiState = copilotUiState,
                     statusText = statusText.value,
                     chatHistory = chatHistory,
                     citations = citations.value,
@@ -200,14 +219,11 @@ class MainActivity : ComponentActivity() {
                     rmsLevel = rmsLevel.floatValue,
                     appLanguage = appLanguage.value,
                     displayTheme = displayTheme.value,
-                    showSettingsDialog = showSettingsDialog.value,
                     isDrivingRestricted = effectiveDrivingRestricted,
                     onHvacToggle = { toggleHvacProperty() },
                     onManualSend = { query -> processUserSpeech(query) },
                     onMicTap = { handleMicTap() },
                     onWakeSimulate = { triggerKeywordWake() },
-                    onOpenSettings = { showSettingsDialog.value = true },
-                    onCloseSettings = { showSettingsDialog.value = false },
                     onLanguageChange = { lang -> appLanguage.value = lang },
                     onThemeChange = { theme -> displayTheme.value = theme },
                     // --- START MODIFICATION ---
@@ -280,10 +296,11 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // --- START MODIFICATION ---
-                // Mentor #17: mock door/music/HVAC/RAG success motion (not full-screen lock)
-                MockActuationOverlay(
-                    event = activeActuation,
-                    vietnamese = appLanguage.value == AppLanguage.VIETNAMESE,
+                // AAOS one-shot control / RAG success feedback overlay
+                CarControlFeedbackOverlay(
+                    state = copilotUiState,
+                    appLanguage = appLanguage.value,
+                    onDismiss = { dismissMockActuation() },
                     modifier = Modifier
                         .align(androidx.compose.ui.Alignment.BottomCenter)
                         .padding(bottom = 72.dp)
@@ -297,13 +314,19 @@ class MainActivity : ComponentActivity() {
     private fun showMockActuation(event: MockActuationEvent) {
         mockActuationClearRunnable?.let { mainHandler.removeCallbacks(it) }
         mockActuation.value = event
+        // Safety clear: if the overlay fails to dismiss, still clear after 5s.
         val clear = Runnable {
             if (mockActuation.value?.token == event.token) {
                 mockActuation.value = null
             }
         }
         mockActuationClearRunnable = clear
-        mainHandler.postDelayed(clear, 2800L)
+        mainHandler.postDelayed(clear, 5000L)
+    }
+
+    private fun dismissMockActuation() {
+        mockActuationClearRunnable?.let { mainHandler.removeCallbacks(it) }
+        mockActuation.value = null
     }
     // --- END MODIFICATION ---
 
@@ -1270,236 +1293,4 @@ class MainActivity : ComponentActivity() {
     // --- END MODIFICATION ---
 }
 
-@Composable
-fun CockpitAppScreen(
-    assistantState: AssistantState,
-    statusText: String,
-    chatHistory: List<com.wheelchair.cockpit.ui.components.ChatMessage>,
-    citations: List<CitationInfo>,
-    vehicleSpeed: Float,
-    isHvacOn: Boolean,
-    hvacTemp: Float,
-    rmsLevel: Float,
-    appLanguage: AppLanguage,
-    displayTheme: DisplayTheme,
-    showSettingsDialog: Boolean,
-    isDrivingRestricted: Boolean = false,
-    onHvacToggle: () -> Unit,
-    onManualSend: (String) -> Unit,
-    onMicTap: () -> Unit,
-    onWakeSimulate: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onCloseSettings: () -> Unit,
-    onLanguageChange: (AppLanguage) -> Unit,
-    onThemeChange: (DisplayTheme) -> Unit,
-    // --- START MODIFICATION ---
-    showDeveloperControls: Boolean = false,
-    devSettings: DevSettings = DevSettings(),
-    healthResult: HealthResult? = null,
-    healthChecking: Boolean = false,
-    onDeveloperModeChange: (Boolean) -> Unit = {},
-    onBaseUrlApply: (String) -> Unit = {},
-    onMockRagChange: (Boolean) -> Unit = {},
-    onBypassDrivingChange: (Boolean) -> Unit = {},
-    onHttpLogLevelChange: (HttpLogLevel) -> Unit = {},
-    onHealthCheck: () -> Unit = {},
-    // --- START MODIFICATION ---
-    partialTranscript: String = "",
-    micDiagLabel: String = "",
-    lastQueryLatencyMs: Long? = null
-    // --- END MODIFICATION ---
-) {
-    var queryInput by remember { mutableStateOf("") }
-    var activeNavIndex by remember { mutableIntStateOf(0) }
 
-    val pulseAnim = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by pulseAnim.animateFloat(
-        initialValue = 0.95f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = EaseInOutSine),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseScale"
-    )
-
-    val primaryBlue = CockpitColors.getPrimaryBlue(displayTheme)
-    val primaryContainer = CockpitColors.getPrimaryContainer(displayTheme)
-    val backgroundBg = CockpitColors.getBackgroundBg(displayTheme)
-    val surfaceContainer = CockpitColors.getSurfaceContainer(displayTheme)
-    val surfaceContainerLow = CockpitColors.getSurfaceContainerLow(displayTheme)
-    val textMain = CockpitColors.getTextMain(displayTheme)
-    val textSecondary = CockpitColors.getTextSecondary(displayTheme)
-    val outlineVariant = CockpitColors.getOutlineVariant(displayTheme)
-
-    val indicatorColor = when (assistantState) {
-        AssistantState.IDLE -> primaryBlue
-        AssistantState.WAKE_DETECTED -> androidx.compose.ui.graphics.Color(0xFF10B981)
-        AssistantState.PROCESSING -> androidx.compose.ui.graphics.Color(0xFFF59E0B)
-        AssistantState.SPEAKING -> androidx.compose.ui.graphics.Color(0xFF8B5CF6)
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(backgroundBg)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = 52.dp)
-        ) {
-            // 1. TOP APP BAR
-            AutomotiveTopBar(
-                vehicleSpeed = vehicleSpeed,
-                isHvacOn = isHvacOn,
-                hvacTemp = hvacTemp,
-                primaryBlue = primaryBlue,
-                backgroundBg = backgroundBg,
-                surfaceContainer = surfaceContainer,
-                textMain = textMain,
-                outlineVariant = outlineVariant,
-                isDrivingRestricted = isDrivingRestricted,
-                onHvacToggle = onHvacToggle,
-                onOpenSettings = onOpenSettings
-            )
-
-            // 2. MAIN CONTENT BODY
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // LEFT PANEL: Status + Input + Quick Actions
-                Column(
-                    modifier = Modifier
-                        .weight(1.4f)
-                        .fillMaxHeight(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    SystemStatusCard(
-                        assistantState = assistantState,
-                        statusText = statusText,
-                        pulseScale = pulseScale,
-                        appLanguage = appLanguage,
-                        primaryBlue = primaryBlue,
-                        primaryContainer = primaryContainer,
-                        surfaceContainer = surfaceContainer,
-                        textMain = textMain,
-                        indicatorColor = indicatorColor,
-                        outlineVariant = outlineVariant,
-                        onWakeSimulate = onWakeSimulate,
-                        onMicTap = onMicTap
-                    )
-
-                    ManualInputBar(
-                        queryInput = queryInput,
-                        assistantState = assistantState,
-                        appLanguage = appLanguage,
-                        primaryBlue = primaryBlue,
-                        surfaceContainer = surfaceContainer,
-                        textMain = textMain,
-                        textSecondary = textSecondary,
-                        outlineVariant = outlineVariant,
-                        isDrivingRestricted = isDrivingRestricted,
-                        onQueryInputChange = { queryInput = it },
-                        onManualSend = onManualSend
-                    )
-
-                    Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        QuickActionCard(
-                            title = if (appLanguage == AppLanguage.VIETNAMESE) "Bản đồ" else "Maps",
-                            icon = Icons.Rounded.Map,
-                            primaryColor = primaryBlue,
-                            surfaceColor = surfaceContainer,
-                            textColor = textMain,
-                            borderColor = outlineVariant,
-                            modifier = Modifier.weight(1f),
-                            enabled = !isDrivingRestricted,
-                            onClick = { onManualSend(if (appLanguage == AppLanguage.VIETNAMESE) "Mở bản đồ" else "Open Maps") }
-                        )
-                        QuickActionCard(
-                            title = if (appLanguage == AppLanguage.VIETNAMESE) "Âm nhạc" else "Music",
-                            icon = Icons.Rounded.MusicNote,
-                            primaryColor = primaryBlue,
-                            surfaceColor = surfaceContainer,
-                            textColor = textMain,
-                            borderColor = outlineVariant,
-                            modifier = Modifier.weight(1f),
-                            enabled = !isDrivingRestricted,
-                            onClick = { onManualSend(if (appLanguage == AppLanguage.VIETNAMESE) "Bật nhạc" else "Play music") }
-                        )
-                    }
-                }
-
-                // RIGHT PANEL: AI Copilot Results
-                CopilotResponsePanel(
-                    chatHistory = chatHistory,
-                    assistantState = assistantState,
-                    rmsLevel = rmsLevel,
-                    appLanguage = appLanguage,
-                    primaryBlue = primaryBlue,
-                    surfaceContainer = surfaceContainer,
-                    surfaceContainerLow = surfaceContainerLow,
-                    textMain = textMain,
-                    textSecondary = textSecondary,
-                    outlineVariant = outlineVariant,
-                    modifier = Modifier.weight(2.6f),
-                    // --- START MODIFICATION ---
-                    partialTranscript = partialTranscript,
-                    micDiagLabel = micDiagLabel,
-                    isDrivingRestricted = isDrivingRestricted,
-                    showLatency = showDeveloperControls && devSettings.developerModeEnabled,
-                    showEvidence = showDeveloperControls && devSettings.developerModeEnabled,
-                    lastHealthLatencyMs = healthResult?.latencyMs
-                    // --- END MODIFICATION ---
-                )
-            }
-        }
-
-        // 3. BOTTOM AUTOMOTIVE NAVIGATION DOCK
-        AutomotiveBottomDock(
-            activeNavIndex = activeNavIndex,
-            appLanguage = appLanguage,
-            primaryBlue = primaryBlue,
-            surfaceContainer = surfaceContainer,
-            textSecondary = textSecondary,
-            outlineVariant = outlineVariant,
-            modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter),
-            isDrivingRestricted = isDrivingRestricted,
-            onNavSelect = { activeNavIndex = it },
-            onMicTap = onMicTap,
-            onOpenSettings = onOpenSettings
-        )
-
-        // 4. SYSTEM SETTINGS OVERLAY MODAL
-        SystemSettingsDialog(
-            show = showSettingsDialog,
-            appLanguage = appLanguage,
-            displayTheme = displayTheme,
-            primaryBlue = primaryBlue,
-            textMain = textMain,
-            outlineVariant = outlineVariant,
-            onClose = onCloseSettings,
-            onLanguageChange = onLanguageChange,
-            onThemeChange = onThemeChange,
-            // --- START MODIFICATION ---
-            showDeveloperControls = showDeveloperControls,
-            devSettings = devSettings,
-            healthResult = healthResult,
-            healthChecking = healthChecking,
-            onDeveloperModeChange = onDeveloperModeChange,
-            onBaseUrlApply = onBaseUrlApply,
-            onMockRagChange = onMockRagChange,
-            onBypassDrivingChange = onBypassDrivingChange,
-            onHttpLogLevelChange = onHttpLogLevelChange,
-            onHealthCheck = onHealthCheck,
-            appVersionName = BuildConfig.VERSION_NAME,
-            // --- START MODIFICATION ---
-            lastQueryLatencyMs = lastQueryLatencyMs
-            // --- END MODIFICATION ---
-        )
-    }
-}

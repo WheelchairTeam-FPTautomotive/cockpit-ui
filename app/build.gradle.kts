@@ -74,6 +74,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.ui:ui-text-google-fonts")
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
@@ -102,4 +103,11 @@ dependencies {
     // Vosk Offline Speech Recognition for KWS
     implementation("net.java.dev.jna:jna:5.13.0@aar")
     implementation("com.alphacephei:vosk-android:0.3.38@aar")
+
+    // Lottie for AAOS one-shot control confirmations (with Compose fallback)
+    implementation("com.airbnb.android:lottie-compose:6.5.0")
+
+    // Coil for SVG vehicle visualization
+    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.coil-kt:coil-svg:2.7.0")
 }

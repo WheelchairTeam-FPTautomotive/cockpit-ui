@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Map
+
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SettingsVoice
 import androidx.compose.material3.Surface
@@ -61,20 +61,12 @@ fun AutomotiveBottomDock(
             ) { onNavSelect(1); onMicTap() }
 
             AutomotiveNavItem(
-                label = "Maps",
-                icon = Icons.Rounded.Map,
+                label = if (appLanguage == AppLanguage.VIETNAMESE) "Cài đặt" else "Settings",
+                icon = Icons.Rounded.Settings,
                 selected = activeNavIndex == 2,
                 primaryColor = if (isDrivingRestricted) primaryBlue.copy(alpha = 0.5f) else primaryBlue,
                 unselectedColor = textSecondary.copy(alpha = if (isDrivingRestricted) 0.5f else 1.0f)
-            ) { if (!isDrivingRestricted) onNavSelect(2) }
-
-            AutomotiveNavItem(
-                label = if (appLanguage == AppLanguage.VIETNAMESE) "Cài đặt" else "Settings",
-                icon = Icons.Rounded.Settings,
-                selected = activeNavIndex == 3,
-                primaryColor = if (isDrivingRestricted) primaryBlue.copy(alpha = 0.5f) else primaryBlue,
-                unselectedColor = textSecondary.copy(alpha = if (isDrivingRestricted) 0.5f else 1.0f)
-            ) { if (!isDrivingRestricted) { onNavSelect(3); onOpenSettings() } }
+            ) { if (!isDrivingRestricted) { onNavSelect(2); onOpenSettings() } }
         }
     }
 }

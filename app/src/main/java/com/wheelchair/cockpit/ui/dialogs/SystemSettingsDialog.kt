@@ -193,7 +193,7 @@ fun SystemSettingsDialog(
 
 // --- START MODIFICATION ---
 @Composable
-private fun DeveloperModeSection(
+internal fun DeveloperModeSection(
     appLanguage: AppLanguage,
     primaryBlue: Color,
     textMain: Color,
