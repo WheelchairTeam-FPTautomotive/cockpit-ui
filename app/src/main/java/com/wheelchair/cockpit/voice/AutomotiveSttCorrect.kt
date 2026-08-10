@@ -52,11 +52,8 @@ object AutomotiveSttCorrect {
         "nhac", "nhiet", "do", "phanh", "guong", "dieu", "hoa", "may", "lanh"
     )
 
-    private val spacedLetters = Regex(
-        """(?<![a-z0-9])(?:[a-z](?:\s+[a-z]){1,5})(?![a-z0-9])""",
-        RegexOption.IGNORE_CASE
-    )
     private val tokenRegex = Regex("""[a-z0-9]+(?:'[a-z]+)?""", RegexOption.IGNORE_CASE)
+
 
     data class Result(val text: String, val fixes: List<Pair<String, String>>)
 
@@ -64,15 +61,54 @@ object AutomotiveSttCorrect {
         if (text.isBlank()) return Result(text, emptyList())
 
         val fixes = mutableListOf<Pair<String, String>>()
-        var out = text.trim()
+        var         out = text.trim()
 
-        out = spacedLetters.replace(out) { match ->
-            val raw = match.value
-            val collapsed = raw.replace(Regex("""\s+"""), "").lowercase()
-            if (" " in raw && collapsed.isNotEmpty()) {
-                fixes += raw to collapsed
+        // Collapse standalone single-letter runs only ("e p b" → "epb"),
+        // never join across normal words ("bên lái").
+        run {
+            val parts = Regex("""(\s+)""").split(out)
+            // Regex.split with capturing groups isn't available the same way —
+            // manual scan:
+            val tokens = mutableListOf<String>()
+            var idx = 0
+            val s = out
+            while (idx < s.length) {
+                if (s[idx].isWhitespace()) {
+                    val start = idx
+                    while (idx < s.length && s[idx].isWhitespace()) idx++
+                    tokens += s.substring(start, idx)
+                } else {
+                    val start = idx
+                    while (idx < s.length && !s[idx].isWhitespace()) idx++
+                    tokens += s.substring(start, idx)
+                }
             }
-            collapsed
+            val rebuilt = StringBuilder()
+            var i = 0
+            while (i < tokens.size) {
+                val tok = tokens[i]
+                if (tok.length == 1 && tok[0].isLetter()) {
+                    val letters = mutableListOf(tok)
+                    var j = i + 1
+                    while (j + 1 < tokens.size && tokens[j].isBlank() &&
+                        tokens[j + 1].length == 1 && tokens[j + 1][0].isLetter()
+                    ) {
+                        letters += tokens[j + 1]
+                        j += 2
+                    }
+                    if (letters.size >= 2) {
+                        val collapsed = letters.joinToString("") { it.lowercase() }
+                        val raw = tokens.subList(i, j).joinToString("")
+                        fixes += raw to collapsed
+                        rebuilt.append(collapsed)
+                        i = j
+                        continue
+                    }
+                }
+                rebuilt.append(tok)
+                i++
+            }
+            out = rebuilt.toString()
         }
 
         for ((src, dst) in explicitMap) {
