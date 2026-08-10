@@ -160,12 +160,14 @@ fun CockpitAppScreen(
 
                             Screen.ASSISTANT -> AssistantScreen(
                                 chatHistory = chatHistory,
+                                assistantState = assistantState,
                                 appLanguage = appLanguage,
                                 textMain = textMain,
                                 textSecondary = textSecondary,
                                 primaryBlue = primaryBlue,
                                 surfaceColor = surfaceContainer,
-                                onMicTap = onMicTap
+                                onMicTap = onMicTap,
+                                onManualSend = onManualSend
                             )
 
                             Screen.MEDIA -> MediaScreen(

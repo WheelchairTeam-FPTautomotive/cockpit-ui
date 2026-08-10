@@ -267,15 +267,24 @@ internal fun DeveloperModeSection(
             supportingText = {
                 Text(
                     if (vi) {
-                        "URL đã Apply dùng cả khi tắt Dev mode. Emulator→PC: http://10.0.2.2:8000/"
+                        "URL đã Apply dùng cả khi tắt Dev mode. Trực tiếp: http://52.64.18.95:8000/"
                     } else {
-                        "Applied URL is used even with Dev mode off. Emulator→PC: http://10.0.2.2:8000/"
+                        "Applied URL is used even with Dev mode off. Direct: http://52.64.18.95:8000/"
                     },
-                    fontSize = 11.sp
+                    fontSize = 11.sp,
+                    color = textMain.copy(alpha = 0.7f)
                 )
             },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = textMain,
+                unfocusedTextColor = textMain,
+                focusedBorderColor = primaryBlue,
+                unfocusedBorderColor = outlineVariant,
+                focusedLabelColor = primaryBlue,
+                unfocusedLabelColor = textMain.copy(alpha = 0.7f)
+            )
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(

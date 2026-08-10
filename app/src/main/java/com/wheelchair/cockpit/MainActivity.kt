@@ -241,9 +241,11 @@ class MainActivity : ComponentActivity() {
                 drivingRestricted &&
                     !(BuildConfig.DEBUG && devSettings.effectiveBypassDrivingLock)
             // --- END MODIFICATION ---
+            // --- END MODIFICATION ---
 
-            Box(modifier = Modifier.fillMaxSize()) {
-                CockpitAppScreen(
+            CompositionLocalProvider(LocalContentColor provides CockpitColors.getTextMain(displayTheme.value)) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    CockpitAppScreen(
                     assistantState = assistantState.value,
                     copilotUiState = copilotUiState,
                     statusText = statusText.value,
@@ -355,6 +357,7 @@ class MainActivity : ComponentActivity() {
                         .padding(bottom = 72.dp)
                 )
                 // --- END MODIFICATION ---
+            }
             }
         }
     }

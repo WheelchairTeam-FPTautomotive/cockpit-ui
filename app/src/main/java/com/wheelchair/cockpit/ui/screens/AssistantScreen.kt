@@ -27,8 +27,17 @@ import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.rounded.Send
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,22 +46,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wheelchair.cockpit.model.AppLanguage
+import com.wheelchair.cockpit.model.AssistantState
 import com.wheelchair.cockpit.ui.components.ChatMessage
 import com.wheelchair.cockpit.ui.theme.CockpitTypography
 
 @Composable
 fun AssistantScreen(
     chatHistory: List<ChatMessage>,
+    assistantState: AssistantState,
     appLanguage: AppLanguage,
     textMain: Color,
     textSecondary: Color,
     primaryBlue: Color,
     surfaceColor: Color,
     onMicTap: () -> Unit,
+    onManualSend: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val vi = appLanguage == AppLanguage.VIETNAMESE
     val listState = rememberLazyListState()
+    var inputText by remember { mutableStateOf("") }
 
     // Welcome message shown when no history yet
     val welcomeMessage = ChatMessage(
@@ -96,22 +109,80 @@ fun AssistantScreen(
             }
         }
 
-        // Mic FAB pinned to bottom-right
-        FloatingActionButton(
-            onClick = onMicTap,
+        // Bottom Input Row
+        Surface(
             modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(20.dp),
-            shape = CircleShape,
-            containerColor = primaryBlue,
-            contentColor = Color.White,
-            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp)
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(16.dp),
+            color = surfaceColor,
+            shape = RoundedCornerShape(32.dp),
+            shadowElevation = 6.dp
         ) {
-            Icon(
-                imageVector = Icons.Rounded.Mic,
-                contentDescription = if (vi) "Nói" else "Speak",
-                modifier = Modifier.size(26.dp)
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    placeholder = { 
+                        Text(
+                            text = if (vi) "Nhập lệnh của bạn..." else "Type your command...",
+                            color = textSecondary,
+                            style = CockpitTypography.body
+                        ) 
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedTextColor = textMain,
+                        unfocusedTextColor = textMain
+                    ),
+                    textStyle = CockpitTypography.body,
+                    singleLine = true
+                )
+                
+                if (inputText.isNotBlank()) {
+                    IconButton(
+                        onClick = {
+                            onManualSend(inputText)
+                            inputText = ""
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Send,
+                            contentDescription = if (vi) "Gửi" else "Send",
+                            tint = primaryBlue
+                        )
+                    }
+                }
+                
+                val isSpeakingOrThinking = assistantState == AssistantState.SPEAKING || assistantState == AssistantState.PROCESSING
+                val buttonColor = if (isSpeakingOrThinking) Color(0xFFEF4444) else primaryBlue
+                val buttonIcon = if (isSpeakingOrThinking) Icons.Rounded.Stop else Icons.Rounded.Mic
+                val buttonDesc = if (isSpeakingOrThinking) (if (vi) "Dừng" else "Stop") else (if (vi) "Nói" else "Speak")
+
+                FloatingActionButton(
+                    onClick = onMicTap,
+                    modifier = Modifier.size(48.dp),
+                    shape = CircleShape,
+                    containerColor = buttonColor,
+                    contentColor = Color.White,
+                    elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 0.dp)
+                ) {
+                    Icon(
+                        imageVector = buttonIcon,
+                        contentDescription = buttonDesc,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
         }
     }
 }

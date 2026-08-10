@@ -33,7 +33,7 @@ data class DevSettings(
         get() = developerModeEnabled && showCitationCards
 
     companion object {
-        const val DEFAULT_BASE_URL = "http://10.0.2.2:8000/"
+        const val DEFAULT_BASE_URL = "http://52.64.18.95:8000/"
 
         fun normalizeBaseUrl(raw: String): String {
             val trimmed = raw.trim()
