@@ -58,7 +58,12 @@ fun SettingsScreen(
     onShowCitationCardsChange: (Boolean) -> Unit = {},
     onHealthCheck: () -> Unit = {},
     appVersionName: String = "",
-    lastQueryLatencyMs: Long? = null
+    lastQueryLatencyMs: Long? = null,
+    // MODIFIED: STM idle TTL controls
+    sessionTtlMin: Int = 5,
+    stmTurns: Int = 0,
+    onSessionTtlChange: (Int) -> Unit = {},
+    onSessionReset: () -> Unit = {}
 ) {
     val vi = appLanguage == AppLanguage.VIETNAMESE
 
@@ -157,7 +162,11 @@ fun SettingsScreen(
                 onShowCitationCardsChange = onShowCitationCardsChange,
                 onHealthCheck = onHealthCheck,
                 appVersionName = appVersionName,
-                lastQueryLatencyMs = lastQueryLatencyMs
+                lastQueryLatencyMs = lastQueryLatencyMs,
+                sessionTtlMin = sessionTtlMin,
+                stmTurns = stmTurns,
+                onSessionTtlChange = onSessionTtlChange,
+                onSessionReset = onSessionReset
             )
         }
 

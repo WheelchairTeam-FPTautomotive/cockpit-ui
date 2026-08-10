@@ -56,7 +56,11 @@ fun SystemSettingsDialog(
     onHealthCheck: () -> Unit = {},
     appVersionName: String = BuildConfig.VERSION_NAME,
     // --- START MODIFICATION ---
-    lastQueryLatencyMs: Long? = null
+    lastQueryLatencyMs: Long? = null,
+    sessionTtlMin: Int = 5,
+    stmTurns: Int = 0,
+    onSessionTtlChange: (Int) -> Unit = {},
+    onSessionReset: () -> Unit = {}
     // --- END MODIFICATION ---
 ) {
     if (!show) return
@@ -174,7 +178,11 @@ fun SystemSettingsDialog(
                         onShowCitationCardsChange = onShowCitationCardsChange,
                         onHealthCheck = onHealthCheck,
                         appVersionName = appVersionName,
-                        lastQueryLatencyMs = lastQueryLatencyMs
+                        lastQueryLatencyMs = lastQueryLatencyMs,
+                        sessionTtlMin = sessionTtlMin,
+                        stmTurns = stmTurns,
+                        onSessionTtlChange = onSessionTtlChange,
+                        onSessionReset = onSessionReset
                     )
                 }
                 // --- END MODIFICATION ---
@@ -211,7 +219,12 @@ internal fun DeveloperModeSection(
     onShowCitationCardsChange: (Boolean) -> Unit,
     onHealthCheck: () -> Unit,
     appVersionName: String,
-    lastQueryLatencyMs: Long? = null
+    lastQueryLatencyMs: Long? = null,
+    // MODIFIED: STM idle TTL Off / 3 / 5 / 10 + reset chat
+    sessionTtlMin: Int = 5,
+    stmTurns: Int = 0,
+    onSessionTtlChange: (Int) -> Unit = {},
+    onSessionReset: () -> Unit = {}
 ) {
     var urlDraft by remember(devSettings.baseUrl) { mutableStateOf(devSettings.baseUrl) }
     val vi = appLanguage == AppLanguage.VIETNAMESE
@@ -335,6 +348,39 @@ internal fun DeveloperModeSection(
                 colors = SwitchDefaults.colors(checkedTrackColor = primaryBlue)
             )
         }
+
+        // --- START MODIFICATION ---
+        Text(
+            text = if (vi) "STM — reset chat sau idle" else "STM — reset chat after idle",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = textMain
+        )
+        Text(
+            text = if (vi) {
+                "Off = tắt STM. 3/5/10 phút idle thì session mới. turns=$stmTurns"
+            } else {
+                "Off = STM disabled. 3/5/10 min idle rotates session. turns=$stmTurns"
+            },
+            fontSize = 11.sp,
+            color = textMain.copy(alpha = 0.65f)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(0, 3, 5, 10).forEach { opt ->
+                SettingsSelectableChip(
+                    selected = sessionTtlMin == opt,
+                    label = if (opt == 0) "Off" else "${opt}m",
+                    icon = Icons.Rounded.Tune,
+                    primaryColor = primaryBlue,
+                    onClick = { onSessionTtlChange(opt) }
+                )
+            }
+        }
+        OutlinedButton(onClick = onSessionReset) {
+            Text(if (vi) "Reset chat / session" else "Reset chat / session")
+        }
+        // --- END MODIFICATION ---
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically

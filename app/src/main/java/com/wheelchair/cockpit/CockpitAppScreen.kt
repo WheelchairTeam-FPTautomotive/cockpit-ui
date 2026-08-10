@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,12 +28,13 @@ import com.wheelchair.cockpit.api.CitationInfo
 import com.wheelchair.cockpit.data.HealthResult
 import com.wheelchair.cockpit.dev.DevSettings
 import com.wheelchair.cockpit.dev.HttpLogLevel
+import com.wheelchair.cockpit.media.NowPlaying
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.AssistantState
 import com.wheelchair.cockpit.model.CopilotUiState
 import com.wheelchair.cockpit.model.DisplayTheme
 import com.wheelchair.cockpit.model.Screen
-import com.wheelchair.cockpit.ui.components.ClimateBar
+import com.wheelchair.cockpit.ui.components.DrivingLockBanner
 import com.wheelchair.cockpit.ui.components.SideRail
 import com.wheelchair.cockpit.ui.components.VoicePlate
 import com.wheelchair.cockpit.ui.screens.AssistantScreen
@@ -73,6 +75,19 @@ fun CockpitAppScreen(
     appLanguage: AppLanguage,
     displayTheme: DisplayTheme,
     isDrivingRestricted: Boolean = false,
+    // MODIFIED: toast + local TTS when user taps a locked control
+    onLockedInteraction: () -> Unit = {},
+    // MODIFIED: multi-app media hub bindings
+    nowPlaying: NowPlaying = NowPlaying(),
+    onMediaPlayPause: () -> Unit = {},
+    onMediaSkipNext: () -> Unit = {},
+    onMediaSkipPrevious: () -> Unit = {},
+    onMediaOpenSource: () -> Unit = {},
+    onMediaSelectLocal: () -> Unit = {},
+    onMediaSelectYouTube: () -> Unit = {},
+    onMediaSelectSoundCloud: () -> Unit = {},
+    mediaVolume: Float = 0.6f,
+    onMediaVolumeChange: (Float) -> Unit = {},
     onHvacToggle: () -> Unit,
     onTempChange: (Float) -> Unit,
     onDoorLockToggle: (Int, Boolean) -> Unit,
@@ -94,9 +109,21 @@ fun CockpitAppScreen(
     onHealthCheck: () -> Unit = {},
     partialTranscript: String = "",
     micDiagLabel: String = "",
-    lastQueryLatencyMs: Long? = null
+    lastQueryLatencyMs: Long? = null,
+    // MODIFIED: STM idle TTL (0=Off, 3/5/10 min) + turn counter
+    sessionTtlMin: Int = 5,
+    stmTurns: Int = 0,
+    onSessionTtlChange: (Int) -> Unit = {},
+    onSessionReset: () -> Unit = {}
 ) {
     var selectedScreen by remember { mutableStateOf(Screen.DASHBOARD) }
+
+    // MODIFIED: force exit Settings while driving lock is active
+    LaunchedEffect(isDrivingRestricted, selectedScreen) {
+        if (isDrivingRestricted && selectedScreen == Screen.SETTINGS) {
+            selectedScreen = Screen.DASHBOARD
+        }
+    }
 
     val primaryBlue = CockpitColors.getPrimaryBlue(displayTheme)
     val backgroundBg = CockpitColors.getBackgroundBg(displayTheme)
@@ -118,6 +145,8 @@ fun CockpitAppScreen(
                 onScreenSelected = { selectedScreen = it },
                 theme = displayTheme,
                 appLanguage = appLanguage,
+                isDrivingRestricted = isDrivingRestricted,
+                onLockedInteraction = onLockedInteraction,
                 modifier = Modifier.fillMaxHeight()
             )
 
@@ -126,6 +155,13 @@ fun CockpitAppScreen(
                     .weight(1f)
                     .fillMaxHeight()
             ) {
+                // MODIFIED: persistent driving-lock banner above content
+                if (isDrivingRestricted) {
+                    DrivingLockBanner(
+                        appLanguage = appLanguage,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
+                    )
+                }
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -155,7 +191,14 @@ fun CockpitAppScreen(
                                 onTempUp = { onTempChange((hvacTemp + 0.5f).coerceAtMost(32f)) },
                                 onTempDown = { onTempChange((hvacTemp - 0.5f).coerceAtLeast(16f)) },
                                 appLanguage = appLanguage,
-                                displayTheme = displayTheme
+                                displayTheme = displayTheme,
+                                isDrivingRestricted = isDrivingRestricted,
+                                onLockedInteraction = onLockedInteraction,
+                                nowPlaying = nowPlaying,
+                                onMediaPlayPause = onMediaPlayPause,
+                                onMediaSkipNext = onMediaSkipNext,
+                                onMediaSkipPrevious = onMediaSkipPrevious,
+                                onMediaOpenSource = onMediaOpenSource
                             )
 
                             Screen.ASSISTANT -> AssistantScreen(
@@ -167,6 +210,13 @@ fun CockpitAppScreen(
                                 primaryBlue = primaryBlue,
                                 surfaceColor = surfaceContainer,
                                 onMicTap = onMicTap,
+                                // MODIFIED: citations default ON; Dev toggle can hide. Timing only in Dev mode.
+                                showCitationCards = !devSettings.developerModeEnabled ||
+                                    devSettings.showCitationCards,
+                                showLatency = showDeveloperControls &&
+                                    devSettings.developerModeEnabled,
+                                outlineVariant = outlineVariant,
+                                isDrivingRestricted = isDrivingRestricted,
                                 onManualSend = onManualSend
                             )
 
@@ -177,7 +227,19 @@ fun CockpitAppScreen(
                                 surfaceContainer = surfaceContainer,
                                 textMain = textMain,
                                 textSecondary = textSecondary,
-                                outlineVariant = outlineVariant
+                                outlineVariant = outlineVariant,
+                                nowPlaying = nowPlaying,
+                                onPlayPause = onMediaPlayPause,
+                                onSkipNext = onMediaSkipNext,
+                                onSkipPrevious = onMediaSkipPrevious,
+                                onOpenSource = onMediaOpenSource,
+                                onSelectLocal = onMediaSelectLocal,
+                                onSelectYouTube = onMediaSelectYouTube,
+                                onSelectSoundCloud = onMediaSelectSoundCloud,
+                                volumeLevel = mediaVolume,
+                                onVolumeChange = onMediaVolumeChange,
+                                isDrivingRestricted = isDrivingRestricted,
+                                onLockedInteraction = onLockedInteraction
                             )
 
                             Screen.MAP -> MapScreen(
@@ -187,7 +249,9 @@ fun CockpitAppScreen(
                                 surfaceColor = surfaceContainer,
                                 textMain = textMain,
                                 textSecondary = textSecondary,
-                                outlineVariant = outlineVariant
+                                outlineVariant = outlineVariant,
+                                isDrivingRestricted = isDrivingRestricted,
+                                onLockedInteraction = onLockedInteraction
                             )
 
                             Screen.SETTINGS -> SettingsScreen(
@@ -210,33 +274,35 @@ fun CockpitAppScreen(
                                 onShowCitationCardsChange = onShowCitationCardsChange,
                                 onHealthCheck = onHealthCheck,
                                 appVersionName = BuildConfig.VERSION_NAME,
-                                lastQueryLatencyMs = lastQueryLatencyMs
+                                lastQueryLatencyMs = lastQueryLatencyMs,
+                                sessionTtlMin = sessionTtlMin,
+                                stmTurns = stmTurns,
+                                onSessionTtlChange = onSessionTtlChange,
+                                onSessionReset = onSessionReset
                             )
                         }
                     }
+
+                    // MODIFIED: plate lives in content column (not over SideRail Settings)
+                    VoicePlate(
+                        state = copilotUiState,
+                        rmsLevel = rmsLevel,
+                        partialTranscript = partialTranscript,
+                        appLanguage = appLanguage,
+                        primaryColor = primaryBlue,
+                        surfaceColor = surfaceContainer,
+                        textMain = textMain,
+                        textSecondary = textSecondary,
+                        outlineVariant = outlineVariant,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 12.dp)
+                    )
                 }
                 
                 // No global Climate Dock, it only appears on the Dashboard screen now.
             }
         }
-
-        // Voice plate floats above the main content, just above the bottom edge.
-        VoicePlate(
-            state = copilotUiState,
-            rmsLevel = rmsLevel,
-            partialTranscript = partialTranscript,
-            appLanguage = appLanguage,
-            primaryColor = primaryBlue,
-            surfaceColor = surfaceContainer,
-            textMain = textMain,
-            textSecondary = textSecondary,
-            outlineVariant = outlineVariant,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 16.dp)
-        )
-
-
     }
 }
 

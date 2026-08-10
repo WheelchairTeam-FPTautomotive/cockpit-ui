@@ -29,6 +29,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -57,10 +58,24 @@ fun ClimateBar(
     textSecondary: Color,
     outlineVariant: Color,
     theme: DisplayTheme,
+    // MODIFIED: touch HVAC blocked while driving; voice path stays in MainActivity
+    isDrivingRestricted: Boolean = false,
+    onLockedInteraction: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val guardedToggle: () -> Unit = {
+        if (isDrivingRestricted) onLockedInteraction() else onHvacToggle()
+    }
+    val guardedTempUp: () -> Unit = {
+        if (isDrivingRestricted) onLockedInteraction() else onTempUp()
+    }
+    val guardedTempDown: () -> Unit = {
+        if (isDrivingRestricted) onLockedInteraction() else onTempDown()
+    }
     GlassSurface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .then(if (isDrivingRestricted) Modifier.alpha(0.55f) else Modifier),
         theme = theme,
         content = {
             Row(
@@ -102,20 +117,20 @@ fun ClimateBar(
                         TempStepButton(
                             icon = Icons.Rounded.Remove,
                             description = "Decrease temperature",
-                            enabled = isHvacOn,
+                            enabled = isDrivingRestricted || isHvacOn,
                             primaryColor = primaryColor,
                             surfaceColor = surfaceColor,
                             textSecondary = textSecondary,
-                            onClick = onTempDown
+                            onClick = guardedTempDown
                         )
                         TempStepButton(
                             icon = Icons.Rounded.Add,
                             description = "Increase temperature",
-                            enabled = isHvacOn,
+                            enabled = isDrivingRestricted || isHvacOn,
                             primaryColor = primaryColor,
                             surfaceColor = surfaceColor,
                             textSecondary = textSecondary,
-                            onClick = onTempUp
+                            onClick = guardedTempUp
                         )
                     }
                 }
@@ -141,7 +156,7 @@ fun ClimateBar(
                         primaryColor = primaryColor,
                         textMain = textMain,
                         surfaceColor = surfaceColor,
-                        onClick = onHvacToggle
+                        onClick = guardedToggle
                     )
                     ClimateToggleButton(
                         icon = Icons.Rounded.AcUnit,
@@ -150,7 +165,7 @@ fun ClimateBar(
                         primaryColor = primaryColor,
                         textMain = textMain,
                         surfaceColor = surfaceColor,
-                        onClick = onHvacToggle
+                        onClick = guardedToggle
                     )
                 }
             }

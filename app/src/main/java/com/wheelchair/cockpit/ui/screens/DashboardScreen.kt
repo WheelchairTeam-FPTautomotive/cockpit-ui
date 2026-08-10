@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.wheelchair.cockpit.media.NowPlaying
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.DisplayTheme
 import com.wheelchair.cockpit.ui.components.StatusCard
@@ -58,6 +59,14 @@ fun DashboardScreen(
     onTempDown: () -> Unit,
     appLanguage: AppLanguage,
     displayTheme: DisplayTheme,
+    // MODIFIED: disable HVAC / door taps while driving lock is on
+    isDrivingRestricted: Boolean = false,
+    onLockedInteraction: () -> Unit = {},
+    nowPlaying: NowPlaying = NowPlaying(),
+    onMediaPlayPause: () -> Unit = {},
+    onMediaSkipNext: () -> Unit = {},
+    onMediaSkipPrevious: () -> Unit = {},
+    onMediaOpenSource: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val backgroundBg = CockpitColors.getBackgroundBg(displayTheme)
@@ -109,10 +118,23 @@ fun DashboardScreen(
                     outlineVariant = outlineVariant,
                     accentGreen = accentGreen,
                     theme = displayTheme,
-                    onFrontLeftToggle = { onDoorLockToggle(1, !doorLockFL) },
-                    onFrontRightToggle = { onDoorLockToggle(4, !doorLockFR) },
-                    onRearLeftToggle = { onDoorLockToggle(16, !doorLockRL) },
-                    onRearRightToggle = { onDoorLockToggle(64, !doorLockRR) },
+                    // MODIFIED: keep VHAL door APIs from main; gate taps while driving locked
+                    onFrontLeftToggle = {
+                        if (isDrivingRestricted) onLockedInteraction()
+                        else onDoorLockToggle(1, !doorLockFL)
+                    },
+                    onFrontRightToggle = {
+                        if (isDrivingRestricted) onLockedInteraction()
+                        else onDoorLockToggle(4, !doorLockFR)
+                    },
+                    onRearLeftToggle = {
+                        if (isDrivingRestricted) onLockedInteraction()
+                        else onDoorLockToggle(16, !doorLockRL)
+                    },
+                    onRearRightToggle = {
+                        if (isDrivingRestricted) onLockedInteraction()
+                        else onDoorLockToggle(64, !doorLockRR)
+                    },
                     flPsi = tirePressureFL,
                     frPsi = tirePressureFR,
                     rlPsi = tirePressureRL,
@@ -146,6 +168,13 @@ fun DashboardScreen(
                     outlineVariant = outlineVariant,
                     theme = displayTheme,
                     appLanguage = appLanguage,
+                    nowPlaying = nowPlaying,
+                    onPlayPause = onMediaPlayPause,
+                    onSkipNext = onMediaSkipNext,
+                    onSkipPrevious = onMediaSkipPrevious,
+                    onOpenSource = onMediaOpenSource,
+                    isDrivingRestricted = isDrivingRestricted,
+                    onLockedInteraction = onLockedInteraction,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 )
                 
@@ -162,6 +191,8 @@ fun DashboardScreen(
                     textSecondary = textSecondary,
                     outlineVariant = outlineVariant,
                     theme = displayTheme,
+                    isDrivingRestricted = isDrivingRestricted,
+                    onLockedInteraction = onLockedInteraction,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

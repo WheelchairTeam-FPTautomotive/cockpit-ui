@@ -100,12 +100,33 @@ class CarPropertyHelper(
 
     private val _uxRestrictionsFlow = MutableStateFlow(false)
     val uxRestrictionsFlow: StateFlow<Boolean> = _uxRestrictionsFlow.asStateFlow()
-    
+
     private var isGearDrive = false
     private var isSystemRestricted = false
-    
+    // MODIFIED: speed latch for hysteresis (enter ≥5 km/h, clear <2 km/h)
+    private var isSpeedRestricted = false
+
+    companion object {
+        // VHAL PERF_VEHICLE_SPEED is m/s; thresholds applied after *3.6 → km/h
+        private const val SPEED_LOCK_ENTER_KMH = 5f
+        private const val SPEED_LOCK_CLEAR_KMH = 2f
+    }
+
     private fun evaluateRestrictions() {
-        val totalRestricted = isSystemRestricted || isGearDrive
+        val speedKmh = _speedFlow.value
+        if (speedKmh >= SPEED_LOCK_ENTER_KMH) {
+            isSpeedRestricted = true
+        } else if (speedKmh < SPEED_LOCK_CLEAR_KMH) {
+            isSpeedRestricted = false
+        }
+        // Keep latch between 2–5 km/h (no flicker in crawl traffic)
+        val totalRestricted = isSystemRestricted || isGearDrive || isSpeedRestricted
+        if (_uxRestrictionsFlow.value != totalRestricted) {
+            Log.i(
+                "CarPropertyHelper",
+                "Driving lock=$totalRestricted (ux=$isSystemRestricted gear=$isGearDrive speedLatch=$isSpeedRestricted speed=${"%.1f".format(speedKmh)}km/h)"
+            )
+        }
         _uxRestrictionsFlow.value = totalRestricted
         onUxRestrictionsChanged(totalRestricted)
     }
@@ -125,7 +146,9 @@ class CarPropertyHelper(
                         is Number -> v.toFloat()
                         else -> 0f
                     }
+                    // MODIFIED: m/s → km/h then re-evaluate driving lock hysteresis
                     _speedFlow.value = kotlin.math.abs(rawSpeed) * 3.6f
+                    evaluateRestrictions()
                 }
                 VehiclePropertyIds.HVAC_AC_ON -> {
                     if (value.value is Boolean) {
@@ -272,6 +295,7 @@ class CarPropertyHelper(
                 val speedKmh = kotlin.math.abs(speedValue.value) * 3.6f
                 _speedFlow.value = speedKmh
                 onSignalChanged(VehiclePropertyIds.PERF_VEHICLE_SPEED, speedValue.value)
+                evaluateRestrictions()
             }
         } catch (e: Exception) {
             Log.w("CarPropertyHelper", "Initial SPEED read warning: ${e.message}")

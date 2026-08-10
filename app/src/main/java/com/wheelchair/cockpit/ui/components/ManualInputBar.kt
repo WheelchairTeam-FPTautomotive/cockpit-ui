@@ -30,12 +30,13 @@ fun ManualInputBar(
     outlineVariant: Color,
     isDrivingRestricted: Boolean = false,
     onQueryInputChange: (String) -> Unit,
-    onManualSend: (String) -> Unit
+    onManualSend: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
 
     Surface(
-        modifier = Modifier.fillMaxWidth().height(52.dp),
+        modifier = modifier.fillMaxWidth().height(52.dp),
         shape = RoundedCornerShape(14.dp),
         color = if (isDrivingRestricted) surfaceContainer.copy(alpha = 0.5f) else surfaceContainer,
         border = BorderStroke(1.dp, if (isDrivingRestricted) Color(0xFFEF4444).copy(alpha = 0.5f) else outlineVariant)

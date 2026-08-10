@@ -1,36 +1,95 @@
 package com.wheelchair.cockpit.ui.screens
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.automirrored.rounded.VolumeDown
+import androidx.compose.material.icons.automirrored.rounded.VolumeMute
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import coil.compose.AsyncImage
+import com.wheelchair.cockpit.media.NowPlaying
 import com.wheelchair.cockpit.model.AppLanguage
 import com.wheelchair.cockpit.model.DisplayTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
-import androidx.compose.ui.zIndex
+
+private fun formatMs(ms: Long): String {
+    if (ms <= 0L) return "0:00"
+    val totalSec = (ms / 1000L).toInt()
+    val m = totalSec / 60
+    val s = totalSec % 60
+    return "%d:%02d".format(m, s)
+}
 
 @Composable
 fun MediaScreen(
@@ -41,114 +100,207 @@ fun MediaScreen(
     textMain: Color,
     textSecondary: Color,
     outlineVariant: Color,
+    // MODIFIED: bound to MediaControllerRepository
+    nowPlaying: NowPlaying = NowPlaying(),
+    onPlayPause: () -> Unit = {},
+    onSkipNext: () -> Unit = {},
+    onSkipPrevious: () -> Unit = {},
+    onOpenSource: () -> Unit = {},
+    onSelectLocal: () -> Unit = {},
+    onSelectYouTube: () -> Unit = {},
+    onSelectSoundCloud: () -> Unit = {},
+    // MODIFIED: STREAM_MUSIC volume (0f..1f)
+    volumeLevel: Float = 0.6f,
+    onVolumeChange: (Float) -> Unit = {},
+    isDrivingRestricted: Boolean = false,
+    onLockedInteraction: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val cyanAccent = primaryBlue
-    
+    val guard: (() -> Unit) -> () -> Unit = { action ->
+        {
+            if (isDrivingRestricted) onLockedInteraction() else action()
+        }
+    }
+
     var isQueueVisible by remember { mutableStateOf(false) }
     var isVolumeVisible by remember { mutableStateOf(false) }
-    var volumeLevel by remember { mutableFloatStateOf(0.6f) }
-    
+    var localVolume by remember { mutableFloatStateOf(volumeLevel) }
+
+    LaunchedEffect(volumeLevel) {
+        localVolume = volumeLevel
+    }
+
     // Auto-hide volume
     LaunchedEffect(isVolumeVisible) {
         if (isVolumeVisible) {
-            delay(3000)
+            delay(3500)
             isVolumeVisible = false
         }
+    }
+    LaunchedEffect(isDrivingRestricted) {
+        if (isDrivingRestricted) {
+            isQueueVisible = false
+            isVolumeVisible = false
+        }
+    }
+
+    val scope = rememberCoroutineScope()
+    val dragAnimatable = remember { Animatable(0f) }
+    val drag = dragAnimatable.value
+
+    val onSkipNextState = rememberUpdatedState(onSkipNext)
+    val onSkipPreviousState = rememberUpdatedState(onSkipPrevious)
+
+    // MODIFIED: cover swipe / button skip share the same animated commit
+    suspend fun commitSkip(direction: Int) {
+        // direction: +1 = previous (swipe right), -1 = next (swipe left)
+        dragAnimatable.animateTo(direction.toFloat(), animationSpec = tween(280, easing = FastOutSlowInEasing))
+        dragAnimatable.snapTo(0f)
+        if (direction > 0) onSkipPreviousState.value() else onSkipNextState.value()
+    }
+
+    fun skipNextAnimated() {
+        if (isDrivingRestricted) {
+            onLockedInteraction()
+            return
+        }
+        scope.launch { commitSkip(-1) }
+    }
+
+    fun skipPreviousAnimated() {
+        if (isDrivingRestricted) {
+            onLockedInteraction()
+            return
+        }
+        scope.launch { commitSkip(1) }
     }
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 32.dp, vertical = 24.dp)
+            .then(if (isDrivingRestricted) Modifier.alpha(0.72f) else Modifier)
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Source chips
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                listOf(
+                    "Local" to onSelectLocal,
+                    "YT Music" to onSelectYouTube,
+                    "SoundCloud" to onSelectSoundCloud
+                ).forEach { (label, action) ->
+                    val selected = when (label) {
+                        "Local" -> nowPlaying.packageName == "com.wheelchair.cockpit" ||
+                            nowPlaying.sourceLabel.equals("Local", ignoreCase = true)
+                        "YT Music" -> nowPlaying.packageName == "com.google.android.apps.youtube.music" ||
+                            nowPlaying.sourceLabel.contains("YouTube", ignoreCase = true)
+                        "SoundCloud" -> nowPlaying.packageName == "com.soundcloud.android" ||
+                            nowPlaying.sourceLabel.contains("SoundCloud", ignoreCase = true)
+                        else -> false
+                    }
+                    Text(
+                        text = label,
+                        color = if (selected) surfaceContainer else textMain,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(if (selected) cyanAccent else outlineVariant.copy(alpha = 0.35f))
+                            .clickable(onClick = guard { action() })
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
             // --- 1. Album Artwork Area (Swipeable Carousel) ---
-            val scope = rememberCoroutineScope()
-            val dragAnimatable = remember { Animatable(0f) }
-            val drag = dragAnimatable.value
-            
-            // Queue temporarily appears if the user is actively swiping/browsing
             val isInteracting = dragAnimatable.isRunning || drag != 0f
             val effectiveQueueVisible = isQueueVisible || isInteracting
-            
+
             val queueAnim by animateFloatAsState(
-                targetValue = if (effectiveQueueVisible) 1f else 0f, 
+                targetValue = if (effectiveQueueVisible) 1f else 0f,
                 label = "queue",
                 animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing)
             )
 
             Box(
                 modifier = Modifier
-                    .weight(1f) // Increased visual prominence
+                    .weight(1f)
                     .fillMaxWidth()
-                    .pointerInput(Unit) {
-                        detectHorizontalDragGestures(
-                            onDragEnd = { 
-                                scope.launch {
-                                    val threshold = 0.3f
-                                    if (dragAnimatable.value > threshold) {
-                                        // Swipe Right (Previous): complete to 1f, then snap to 0f
-                                        dragAnimatable.animateTo(1f, animationSpec = tween(300))
-                                        dragAnimatable.snapTo(0f)
-                                    } else if (dragAnimatable.value < -threshold) {
-                                        // Swipe Left (Next): complete to -1f, then snap to 0f
-                                        dragAnimatable.animateTo(-1f, animationSpec = tween(300))
-                                        dragAnimatable.snapTo(0f)
-                                    } else {
-                                        // Cancel: snap back to 0f
-                                        dragAnimatable.animateTo(0f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow))
+                    .pointerInput(isDrivingRestricted) {
+                        if (isDrivingRestricted) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    if (event.changes.any { it.changedToDown() }) {
+                                        onLockedInteraction()
                                     }
                                 }
-                            },
-                            onDragCancel = { 
-                                scope.launch {
-                                    dragAnimatable.animateTo(0f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow))
-                                }
                             }
-                        ) { change, dragAmount ->
-                            change.consume()
-                            scope.launch {
-                                val newVal = dragAnimatable.value + (dragAmount / 400f)
-                                dragAnimatable.snapTo(newVal.coerceIn(-1f, 1f))
+                        } else {
+                            detectHorizontalDragGestures(
+                                onDragEnd = {
+                                    scope.launch {
+                                        val threshold = 0.28f
+                                        when {
+                                            dragAnimatable.value > threshold -> commitSkip(1)
+                                            dragAnimatable.value < -threshold -> commitSkip(-1)
+                                            else -> dragAnimatable.animateTo(
+                                                0f,
+                                                animationSpec = spring(
+                                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                                    stiffness = Spring.StiffnessLow
+                                                )
+                                            )
+                                        }
+                                    }
+                                },
+                                onDragCancel = {
+                                    scope.launch {
+                                        dragAnimatable.animateTo(
+                                            0f,
+                                            animationSpec = spring(
+                                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                                stiffness = Spring.StiffnessLow
+                                            )
+                                        )
+                                    }
+                                }
+                            ) { change, dragAmount ->
+                                change.consume()
+                                scope.launch {
+                                    val newVal = dragAnimatable.value + (dragAmount / 400f)
+                                    dragAnimatable.snapTo(newVal.coerceIn(-1f, 1f))
+                                }
                             }
                         }
                     },
                 contentAlignment = Alignment.Center
             ) {
-                
-                // Render covers from -2 to 2 to support exactly 5 visible items
                 for (i in -2..2) {
-                    val pos = i + drag // Continuous position based on drag
-                    
-                    // Alpha logic
-                    // Queue OFF: 1.5x multiplier means alpha reaches 0 exactly at pos = ±0.66
-                    // This ensures only the absolute center cover is visible when resting.
-                    val baseAlpha = (1f - (abs(pos) * 1.5f)).coerceIn(0f, 1f) 
-                    // Queue ON: 0.4x multiplier ensures 5 covers stay comfortably visible
-                    val queueAlpha = (1f - (abs(pos) * 0.4f)).coerceIn(0f, 1f) 
+                    val pos = i + drag
+                    val baseAlpha = (1f - (abs(pos) * 1.5f)).coerceIn(0f, 1f)
+                    val queueAlpha = (1f - (abs(pos) * 0.4f)).coerceIn(0f, 1f)
                     val alpha = baseAlpha * (1f - queueAnim) + queueAlpha * queueAnim
-                    
+
                     if (alpha > 0.01f) {
-                        // Offset logic: 200dp spread when OFF, tighter 160dp spread when ON
                         val xOffset = (200.dp - (40.dp * queueAnim)) * pos
-                        
-                        // Scale logic
                         val scale = (1f - (abs(pos) * 0.2f)).coerceIn(0f, 1f)
-                        
-                        // Z-Index: covers closer to center (pos 0) are always on top
                         val zIndex = -abs(pos)
-                        
-                        // Visual emphasis for the card closest to center
                         val isCenterCard = abs(pos) < 0.5f
                         val bgColor = if (isCenterCard) cyanAccent.copy(alpha = 0.2f) else outlineVariant
                         val borderWidth = if (isCenterCard) 2.dp else 0.dp
                         val bColor = if (isCenterCard) cyanAccent else Color.Transparent
                         val iconTint = if (isCenterCard) cyanAccent else textSecondary
-                        
+
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight(scale)
@@ -160,78 +312,96 @@ fun MediaScreen(
                                 .background(bgColor)
                                 .border(borderWidth, bColor, RoundedCornerShape(40.dp))
                                 .clickable {
-                                    if (!isCenterCard) {
-                                        scope.launch {
-                                            // Smoothly pull tapped cover to center, then visually 'commit' track change
-                                            dragAnimatable.animateTo(-i.toFloat(), animationSpec = tween(400, easing = FastOutSlowInEasing))
-                                            dragAnimatable.snapTo(0f)
-                                        }
+                                    if (isDrivingRestricted) {
+                                        onLockedInteraction()
+                                    } else if (!isCenterCard) {
+                                        // Tap neighbor cover → same as skip prev/next
+                                        if (i < 0) skipPreviousAnimated() else skipNextAnimated()
                                     }
                                 },
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                Icons.Rounded.MusicNote, 
-                                contentDescription = "Album Art", 
-                                modifier = Modifier.size(120.dp), 
-                                tint = iconTint
-                            )
+                            // MODIFIED: show queue neighbor covers (bitmap or URI), not only center
+                            val (art, artUri) = nowPlaying.artForOffset(i)
+                            when {
+                                art != null && !art.isRecycled -> {
+                                    Image(
+                                        bitmap = art.asImageBitmap(),
+                                        contentDescription = nowPlaying.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                !artUri.isNullOrBlank() -> {
+                                    AsyncImage(
+                                        model = artUri,
+                                        contentDescription = nowPlaying.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                else -> {
+                                    Icon(
+                                        Icons.Rounded.MusicNote,
+                                        contentDescription = "Album Art",
+                                        modifier = Modifier.size(if (isCenterCard) 120.dp else 72.dp),
+                                        tint = iconTint
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(24.dp))
-            
+
             // --- 2. Compact Playback Controls & Info ---
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(140.dp), // More compact lower area
+                    .height(140.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left: Compact Song Info
                 Column(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                     verticalArrangement = Arrangement.Center
                 ) {
                     Text(
-                        text = "Very Long Song Title That Does Not Fit...",
+                        text = nowPlaying.title,
                         color = textMain,
-                        fontSize = 24.sp, // Reduced font size
+                        fontSize = 24.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.clickable { /* action */ }
+                        modifier = Modifier.clickable(onClick = guard { onOpenSource() })
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "The Rolling Stones • Hackney Diamonds",
+                        text = "${nowPlaying.artist} · ${nowPlaying.sourceLabel}",
                         color = textSecondary,
-                        fontSize = 16.sp, // Reduced font size
+                        fontSize = 16.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.clickable { /* action */ }
+                        modifier = Modifier.clickable(onClick = guard { onOpenSource() })
                     )
                 }
-                
-                // Center: Controls & Progress
+
                 Column(
                     modifier = Modifier.weight(2f).fillMaxHeight(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    // Controls (Shuffle -> Prev -> Play -> Next -> Repeat)
                     Row(
-                        verticalAlignment = Alignment.CenterVertically, 
+                        verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center
                     ) {
-                        IconButton(onClick = { /* Shuffle */ }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Rounded.Shuffle, contentDescription = "Shuffle", tint = cyanAccent, modifier = Modifier.size(28.dp))
+                        IconButton(onClick = guard { onSelectLocal() }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Rounded.Shuffle, contentDescription = "Local queue", tint = cyanAccent, modifier = Modifier.size(28.dp))
                         }
                         Spacer(modifier = Modifier.width(16.dp))
-                        IconButton(onClick = { /* Prev */ }, modifier = Modifier.size(64.dp)) {
+                        IconButton(onClick = { skipPreviousAnimated() }, modifier = Modifier.size(64.dp)) {
                             Icon(Icons.Rounded.SkipPrevious, contentDescription = "Previous", tint = textMain, modifier = Modifier.size(40.dp))
                         }
                         Spacer(modifier = Modifier.width(24.dp))
@@ -240,68 +410,89 @@ fun MediaScreen(
                                 .size(80.dp)
                                 .clip(CircleShape)
                                 .background(cyanAccent)
-                                .clickable { /* Play/Pause */ },
+                                .clickable(onClick = guard { onPlayPause() }),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Rounded.Pause, contentDescription = "Play/Pause", tint = surfaceContainer, modifier = Modifier.size(40.dp))
+                            Icon(
+                                if (nowPlaying.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = "Play/Pause",
+                                tint = surfaceContainer,
+                                modifier = Modifier.size(40.dp)
+                            )
                         }
                         Spacer(modifier = Modifier.width(24.dp))
-                        IconButton(onClick = { /* Next */ }, modifier = Modifier.size(64.dp)) {
+                        IconButton(onClick = { skipNextAnimated() }, modifier = Modifier.size(64.dp)) {
                             Icon(Icons.Rounded.SkipNext, contentDescription = "Next", tint = textMain, modifier = Modifier.size(40.dp))
                         }
                         Spacer(modifier = Modifier.width(16.dp))
-                        IconButton(onClick = { /* Repeat */ }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Rounded.Repeat, contentDescription = "Repeat", tint = textSecondary, modifier = Modifier.size(28.dp))
+                        IconButton(onClick = guard { onOpenSource() }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Rounded.Repeat, contentDescription = "Open source app", tint = textSecondary, modifier = Modifier.size(28.dp))
                         }
                     }
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // Progress Bar
+
                     Row(
-                        verticalAlignment = Alignment.CenterVertically, 
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth(0.9f)
                     ) {
-                        Text("1:42", color = textSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Text(formatMs(nowPlaying.positionMs), color = textSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         Spacer(modifier = Modifier.width(16.dp))
-                        // Progress Track
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(8.dp)
                                 .clip(CircleShape)
                                 .background(outlineVariant)
-                                .clickable { /* seek */ }
+                                .clickable(onClick = guard { onPlayPause() })
                         ) {
-                            Box(modifier = Modifier.fillMaxWidth(0.43f).fillMaxHeight().background(cyanAccent))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(nowPlaying.progress.coerceIn(0f, 1f))
+                                    .fillMaxHeight()
+                                    .background(cyanAccent)
+                            )
                         }
                         Spacer(modifier = Modifier.width(16.dp))
-                        Text("3:58", color = textSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Text(formatMs(nowPlaying.durationMs), color = textSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     }
                 }
-                
-                // Right: Queue & Volume triggers
+
                 Column(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.Center
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Queue Button
-                        IconButton(onClick = { isQueueVisible = !isQueueVisible }, modifier = Modifier.size(64.dp)) {
-                            Icon(Icons.Rounded.QueueMusic, contentDescription = "Queue", tint = if (isQueueVisible) cyanAccent else textSecondary, modifier = Modifier.size(36.dp))
+                        IconButton(onClick = guard { isQueueVisible = !isQueueVisible }, modifier = Modifier.size(64.dp)) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.QueueMusic,
+                                contentDescription = "Queue",
+                                tint = if (isQueueVisible) cyanAccent else textSecondary,
+                                modifier = Modifier.size(36.dp)
+                            )
                         }
                         Spacer(modifier = Modifier.width(16.dp))
-                        // Volume Trigger Button
-                        IconButton(onClick = { isVolumeVisible = !isVolumeVisible }, modifier = Modifier.size(64.dp)) {
-                            Icon(Icons.Rounded.VolumeUp, contentDescription = "Volume", tint = textSecondary, modifier = Modifier.size(36.dp))
+                        IconButton(
+                            onClick = guard {
+                                isVolumeVisible = !isVolumeVisible
+                                if (isVolumeVisible) localVolume = volumeLevel
+                            },
+                            modifier = Modifier.size(64.dp)
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.VolumeUp,
+                                contentDescription = "Volume",
+                                tint = if (isVolumeVisible) cyanAccent else textSecondary,
+                                modifier = Modifier.size(36.dp)
+                            )
                         }
                     }
                 }
             }
         }
-        
-        // --- 3. Refined Volume Popup Overlay ---
+
+        // --- 3. Volume popup (vertical drag → STREAM_MUSIC) ---
         AnimatedVisibility(
             visible = isVolumeVisible,
             enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
@@ -320,41 +511,66 @@ fun MediaScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Column(
-                    horizontalAlignment = Alignment.CenterHorizontally, 
+                    horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxSize().padding(vertical = 24.dp)
                 ) {
-                    // Dynamic Speaker Icon
                     val volIcon = when {
-                        volumeLevel == 0f -> Icons.Rounded.VolumeMute
-                        volumeLevel <= 0.5f -> Icons.Rounded.VolumeDown
-                        else -> Icons.Rounded.VolumeUp
+                        localVolume <= 0.01f -> Icons.AutoMirrored.Rounded.VolumeMute
+                        localVolume <= 0.5f -> Icons.AutoMirrored.Rounded.VolumeDown
+                        else -> Icons.AutoMirrored.Rounded.VolumeUp
                     }
                     Icon(volIcon, contentDescription = null, tint = textMain, modifier = Modifier.size(32.dp))
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // Volume Track
+
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .width(16.dp)
+                            .width(28.dp)
                             .clip(CircleShape)
                             .background(outlineVariant)
-                            .pointerInput(Unit) {
-                                detectHorizontalDragGestures { _, _ -> /* Update volume */ }
+                            .pointerInput(isDrivingRestricted) {
+                                if (isDrivingRestricted) {
+                                    awaitEachGesture {
+                                        awaitFirstDown()
+                                        onLockedInteraction()
+                                    }
+                                    return@pointerInput
+                                }
+                                val latestVolumeCb = onVolumeChange
+                                awaitEachGesture {
+                                    val down = awaitFirstDown()
+                                    val h = size.height.coerceAtLeast(1).toFloat()
+                                    fun yToVol(y: Float) = (1f - (y / h)).coerceIn(0f, 1f)
+                                    var vol = yToVol(down.position.y)
+                                    localVolume = vol
+                                    latestVolumeCb(vol)
+                                    drag(down.id) { change ->
+                                        vol = yToVol(change.position.y)
+                                        localVolume = vol
+                                        latestVolumeCb(vol)
+                                        if (change.positionChange() != Offset.Zero) {
+                                            change.consume()
+                                        }
+                                    }
+                                }
                             },
                         contentAlignment = Alignment.BottomCenter
                     ) {
-                        Box(modifier = Modifier.fillMaxWidth().fillMaxHeight(volumeLevel).background(cyanAccent))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .fillMaxHeight(localVolume.coerceIn(0f, 1f))
+                                .background(cyanAccent)
+                        )
                     }
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // Numeric Volume Value (replacing the max-volume icon)
+
                     Text(
-                        text = "${(volumeLevel * 100).toInt()}", 
-                        color = textMain, 
-                        fontSize = 18.sp, 
+                        text = "${(localVolume * 100).toInt()}",
+                        color = textMain,
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }

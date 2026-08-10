@@ -25,10 +25,22 @@
     <uses-permission android:name="android.car.permission.CAR_ENERGY" />
     <uses-permission android:name="android.car.permission.CAR_UX_RESTRICTIONS_CHANGE" />
 
+    <!-- MODIFIED: cross-app MediaSession control (requires priv-app whitelist) -->
+    <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <!-- MODIFIED: discover / launch music apps for multi-session control -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_MUSIC" />
+        </intent>
+        <package android:name="com.google.android.apps.youtube.music" />
+        <package android:name="com.soundcloud.android" />
     </queries>
 
     <application
@@ -66,6 +78,22 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
         <!-- END MODIFICATION -->
+
+        <!-- MODIFIED: local MP3 MediaSession so demo always has a controllable source -->
+        <service
+            android:name=".media.LocalMediaService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- MODIFIED: Studio path for YT Music / SoundCloud sessions without priv-app remount -->
+        <service
+            android:name=".media.MediaNotificationListener"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>
